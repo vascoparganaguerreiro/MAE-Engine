@@ -127,7 +127,7 @@ def fetch_garmin_data():
             bb_data = client.get_body_battery(current_date)
             if bb_data and isinstance(bb_data, list):
                 vals = [item.get("bodyBatteryLevel", item.get("value", 0)) for item in bb_data if isinstance(item, dict)]
-                    bb_high = max(vals) if vals else None
+                bb_high = max(vals) if vals else None
 
         bb_peak_hist.append(bb_high)
     except Exception:
