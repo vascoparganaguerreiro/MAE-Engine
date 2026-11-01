@@ -119,12 +119,20 @@ def fetch_garmin_data():
         except Exception:
             hrv_hist.append(None)
 
-        try:
+      try:
+        user_summary = client.get_user_summary(current_date)
+        bb_high = user_summary.get("bodyBatteryHighestValue")
+        
+        if bb_high is None:
             bb_data = client.get_body_battery(current_date)
-            bb_peak_hist.append(max([item.get("bodyBatteryValue", item.get("value", item.get("charged", 0))) for item in bb_data if isinstance(item, dict)], default=67) if bb_data else None)
-        except Exception:
-            bb_peak_hist.append(None)
+            if bb_data and isinstance(bb_data, list):
+                vals = [item.get("bodyBatteryLevel", item.get("value", 0)) for item in bb_data if isinstance(item, dict)]
+                    bb_high = max(vals) if vals else None
 
+        bb_peak_hist.append(bb_high)
+    except Exception:
+        bb_peak_hist.append(None)
+            
         try:
             stats = client.get_user_summary(current_date)
             rhr_hist.append(stats.get("restingHeartRate"))
