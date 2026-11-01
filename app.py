@@ -120,10 +120,10 @@ def fetch_garmin_data():
             hrv_hist.append(None)
 
         try:
-        user_summary = client.get_user_summary(current_date)
-        bb_high = user_summary.get("bodyBatteryHighestValue")
+            user_summary = client.get_user_summary(current_date)
+            bb_high = user_summary.get("bodyBatteryHighestValue")
         
-        if bb_high is None:
+            if bb_high is None:
             bb_data = client.get_body_battery(current_date)
             if bb_data and isinstance(bb_data, list):
                 vals = [item.get("bodyBatteryLevel", item.get("value", 0)) for item in bb_data if isinstance(item, dict)]
