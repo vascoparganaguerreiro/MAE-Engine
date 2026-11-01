@@ -119,7 +119,7 @@ def fetch_garmin_data():
         except Exception:
             hrv_hist.append(None)
 
-      try:
+        try:
         user_summary = client.get_user_summary(current_date)
         bb_high = user_summary.get("bodyBatteryHighestValue")
         
