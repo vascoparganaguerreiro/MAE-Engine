@@ -24,18 +24,6 @@ if "user_events" not in st.session_state:
         {"name": "IRONMAN 70.3 Cascais", "date": date(2027, 10, 17)}
     ]
 
-# Seletor do Objetivo Corporal
-st.sidebar.markdown("---")
-body_goal = st.sidebar.selectbox(
-    "Objetivo Corporal Principal:",
-    [
-        "Hipertrofia Estética (V-Taper & Densidade)",
-        "Força Pura & Potência Relativa",
-        "Manutenção / Recomposição Corporal",
-        "Performance Puro Endurecimento (Triatlo)"
-    ]
-)
-
 TEXTS = {
     "Português": {
         "title": "📊 Painel Fisiológico & Auto-Regulação de Treino",
@@ -112,6 +100,23 @@ t = TEXTS[lang]
 if page == "🎯 Goals & Eventos":
     st.title("🎯 Central de Eventos & Objetivos")
     st.markdown("Gestão cronológica de provas alvo com contagem decrescente em tempo real.")
+    
+    body_goal_options = [
+        "Hipertrofia Estética (V-Taper & Densidade)",
+        "Força Pura & Potência Relativa",
+        "Manutenção / Recomposição Corporal",
+        "Performance Puro Endurecimento (Triatlo)"
+    ]
+    
+    if "body_goal" not in st.session_state:
+        st.session_state.body_goal = body_goal_options[0]
+        
+    st.session_state.body_goal = st.selectbox(
+        "💪 Objetivo Corporal Principal:",
+        options=body_goal_options,
+        index=body_goal_options.index(st.session_state.body_goal) if st.session_state.body_goal in body_goal_options else 0
+    )
+    
     st.markdown("---")
 
     now = datetime.now()
