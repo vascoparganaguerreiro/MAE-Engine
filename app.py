@@ -468,7 +468,7 @@ df_metrics = pd.DataFrame({
     t["cols"][3]: [data['sleep'][2], data['hrv'][2], data['bb_peak'][2], data['rhr'][2], data['stress'][2], data['resp'][2]],
     t["cols"][4]: [data['sleep'][3], data['hrv'][3], data['bb_peak'][3], data['rhr'][3], data['stress'][3], data['resp'][3]],
 })
-st.dataframe(df_metrics, use_container_width=True, hide_index=True))
+st.dataframe(df_metrics, use_container_width=True, hide_index=True)
 
 st.subheader(t["charts_title"])
 tab1, tab2, tab3 = st.tabs(t["tabs"])
