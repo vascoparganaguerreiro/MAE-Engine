@@ -120,17 +120,32 @@ def fetch_garmin_data():
             hrv_hist.append(None)
 
         try:
-            bb_data = client.get_body_battery(current_date)
-            vals = []
-            if bb_data and isinstance(bb_data, list):
-                for item in bb_data:
-                    if isinstance(item, dict):
-                        v = item.get("bodyBatteryLevel") if item.get("bodyBatteryLevel") is not None else item.get("bodyBatteryValue")
-                        if v is None:
-                            v = item.get("value")
-                        if v is not None and isinstance(v, (int, float)):
-                            vals.append(v)
-            bb_high = max(vals) if vals else None
+           # 1. Tenta extrair o pico direto do resumo diário da Garmin
+            summary = client.get_user_summary(current_date)
+            bb_high = summary.get("bodyBatteryHighestValue") if isinstance(summary, dict) else None
+        
+            # 2. Se não encontrou no summary, varre os arrays do dia
+            if bb_high is None:
+                bb_data = client.get_body_battery(current_date)
+                vals = []
+                if isinstance(bb_data, list):
+                    for entry in bb_data:
+                        if isinstance(entry, dict):
+                            # A Garmin costuma aninhar os pontos dentro de bodyBatteryValuesArray
+                            arr = entry.get("bodyBatteryValuesArray") or entry.get("bodyBatteryValues") or []
+                            if isinstance(arr, list):
+                                for pt in arr:
+                                    # pt costuma ser [timestamp, val] ou um dict com o valor
+                                    val = pt[1] if isinstance(pt, (list, tuple)) and len(pt) > 1 else (pt.get("value") if isinstance(pt, dict) else None)
+                                    if val is not None and isinstance(val, (int, float)):
+                                        vals.append(val)
+                            else:
+                                # Caso os pontos estejam na raiz do dicionário
+                                val = entry.get("bodyBatteryLevel") or entry.get("bodyBatteryValue") or entry.get("value")
+                                if val is not None and isinstance(val, (int, float)):
+                                    vals.append(val)
+                bb_high = max(vals) if vals else None
+
             bb_peak_hist.append(bb_high)
         except Exception:
             bb_peak_hist.append(None)
