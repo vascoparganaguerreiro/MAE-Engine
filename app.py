@@ -182,7 +182,7 @@ if page == "🎯 Goals & Eventos":
             for idx in sorted(events_to_remove, reverse=True):
                 st.session_state.user_events.pop(idx)
             st.rerun()
-st.stop()
+    st.stop()
 
 
 # --- CABEÇALHO PREMIUM ---
