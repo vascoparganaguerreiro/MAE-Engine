@@ -40,7 +40,7 @@ TEXTS = {
     "Português": {
         "title": "📊 Painel Fisiológico & Auto-Regulação de Treino",
         "subtitle": "Análise multivariável em tempo real cruzando a recuperação atual com linhas de tendência de 3d, 7d e 14d.",
-        "sync_btn": "🔄 Synchronize Garmin",
+        "sync_btn": "🔄 Synchronize Data",
         "fetching": "A consultar a nuvem Garmin e a processar tendências de 14 dias...",
         "training_readiness": "Prontidão de Treino",
         "hrv_status": "Estado do VRC (HRV)",
