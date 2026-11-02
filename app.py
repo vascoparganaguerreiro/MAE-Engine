@@ -117,14 +117,15 @@ if page == "🎯 Goals & Eventos":
     now = datetime.now()
     sorted_events = sorted(st.session_state.user_events, key=lambda x: x["date"])
 
-    if sorted_events:
+  if sorted_events:
         next_event = sorted_events[0]
         event_dt = datetime.combine(next_event["date"], datetime.min.time())
         delta = event_dt - now
         days_left = max(0, delta.days)
         hours_left = max(0, delta.seconds // 3600)
+        minutes_left = max(0, (delta.seconds % 3600) // 60)
 
-        # Cartão Destaque Gigante do Próximo Evento
+        # Cartão Destaque Gigante do Próximo Evento (com Minutos)
         st.markdown(f"""
         <div style="background: linear-gradient(135deg, #1E222B 0%, #111827 100%); border-radius: 16px; padding: 26px; border: 2px solid #10B981; margin-bottom: 24px; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.3);">
             <div style="color: #10B981; font-size: 0.85rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em;">PRÓXIMO DESAFIO PRINCIPAL</div>
@@ -139,23 +140,29 @@ if page == "🎯 Goals & Eventos":
                     <span style="color: #10B981; font-size: 1.8rem; font-weight: 900;">{hours_left}</span>
                     <span style="color: #9CA3AF; font-size: 0.85rem; font-weight: 600; margin-left: 4px;">Horas</span>
                 </div>
+                <div style="background-color: rgba(16, 185, 129, 0.15); padding: 10px 22px; border-radius: 10px; border: 1px solid rgba(16, 185, 129, 0.3);">
+                    <span style="color: #10B981; font-size: 1.8rem; font-weight: 900;">{minutes_left}</span>
+                    <span style="color: #9CA3AF; font-size: 0.85rem; font-weight: 600; margin-left: 4px;">Minutos</span>
+                </div>
             </div>
         </div>
         """, unsafe_allow_html=True)
 
-    # Lista Cronológica de Eventos Futuros
+    # Lista Cronológica de Eventos Futuros (com Dias, Horas e Minutos)
     st.subheader("📅 Cronograma Completo de Provas")
     for ev in sorted_events:
         event_dt = datetime.combine(ev["date"], datetime.min.time())
-        d_left = max(0, (event_dt - now).days)
-        h_left = max(0, (event_dt - now).seconds // 3600)
+        delta_ev = event_dt - now
+        
+        d_left = max(0, delta_ev.days)
+        h_left = max(0, delta_ev.seconds // 3600)
+        m_left = max(0, (delta_ev.seconds % 3600) // 60)
         
         col_n, col_d, col_t = st.columns([3, 2, 2])
         col_n.markdown(f"**📌 {ev['name']}**")
         col_d.caption(f"🗓️ {ev['date'].strftime('%d/%m/%Y')}")
-        col_t.markdown(f"⏱️ **{d_left}d {h_left}h restantes**")
+        col_t.markdown(f"⏱️ **{d_left}d {h_left}h {m_left}m restantes**")
         st.divider()
-
     # Painel para Adicionar/Editar Eventos (Até 15)
     with st.expander("⚙️ Gerir Lista de Eventos (Adicionar / Eliminar)"):
         if len(st.session_state.user_events) < 15:
