@@ -193,9 +193,9 @@ def fetch_garmin_data():
             if isinstance(bb_today, list) and bb_today:
                 last_entry = bb_today[-1]
                 if isinstance(last_entry, dict):
-                bb_current = last_entry.get("bodyBatteryLevel") or last_entry.get("bodyBatteryValue") or last_entry.get("value")
-    except Exception:
-        pass
+                    bb_current = last_entry.get("bodyBatteryLevel") or last_entry.get("bodyBatteryValue") or last_entry.get("value")
+        except Exception:
+            pass
 
     training_readiness = "N/A"
     try:
