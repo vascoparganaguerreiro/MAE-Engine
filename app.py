@@ -176,7 +176,7 @@ if page == "🎯 Goals & Eventos":
                 st.session_state.user_events.pop(idx)
             st.rerun()
 
-else:
+
 # --- CABEÇALHO PREMIUM ---
 st.markdown("""
 <style>
