@@ -10,6 +10,65 @@ st.set_page_config(page_title="Garmin Auto-Regulation Engine", layout="wide")
 # SELETOR DE IDIOMA (BARRA LATERAL)
 # ==========================================
 lang = st.sidebar.selectbox("🌐 Select Language / Selecionar Língua", ["Português", "English"])
+# ==========================================
+# GESTÃO DINÂMICA DE EVENTOS (BARRA LATERAL)
+# ==========================================
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 🎯 Eventos & Objetivos")
+
+# Inicializa os teus eventos no session_state se ainda não existirem
+if "user_events" not in st.session_state:
+    st.session_state.user_events = [
+        {"name": "10K Prova de Dezembro", "date": date(2026, 12, 15)},
+        {"name": "Meia Maratona de Berlim", "date": date(2027, 4, 4)},
+        {"name": "Triatlo Olímpico", "date": date(2027, 9, 12)},
+        {"name": "IRONMAN 70.3 Cascais", "date": date(2027, 10, 17)}
+    ]
+
+# Botão para adicionar novos spots (até 15)
+if len(st.session_state.user_events) < 15:
+    if st.sidebar.button("➕ Adicionar Novo Evento", use_container_width=True):
+        st.session_state.user_events.append({
+            "name": f"Novo Evento {len(st.session_state.user_events) + 1}",
+            "date": date.today() + timedelta(days=90)
+        })
+        st.rerun()
+
+st.sidebar.caption(f"Eventos ativos: {len(st.session_state.user_events)} / 15")
+
+# Formularos para editar ou remover cada evento
+events_to_remove = []
+for idx, ev in enumerate(st.session_state.user_events):
+    with st.sidebar.expander(f"📌 {ev['name']}", expanded=(idx == 0)):
+        col_ev_name, col_ev_del = st.columns([4, 1])
+        with col_ev_name:
+            new_name = st.text_input(f"Nome #{idx+1}:", value=ev["name"], key=f"ev_name_{idx}")
+        with col_ev_del:
+            st.write("")
+            if st.button("🗑️", key=f"del_ev_{idx}", help="Apagar este evento"):
+                events_to_remove.append(idx)
+        
+        new_date = st.date_input(f"Data:", value=ev["date"], key=f"ev_date_{idx}")
+        
+        st.session_state.user_events[idx]["name"] = new_name
+        st.session_state.user_events[idx]["date"] = new_date
+
+if events_to_remove:
+    for idx in sorted(events_to_remove, reverse=True):
+        st.session_state.user_events.pop(idx)
+    st.rerun()
+
+# Seletor do Objetivo Corporal
+st.sidebar.markdown("---")
+body_goal = st.sidebar.selectbox(
+    "Objetivo Corporal Principal:",
+    [
+        "Hipertrofia Estética (V-Taper & Densidade)",
+        "Força Pura & Potência Relativa",
+        "Manutenção / Recomposição Corporal",
+        "Performance Puro Endurecimento (Triatlo)"
+    ]
+)
 
 TEXTS = {
     "Português": {
