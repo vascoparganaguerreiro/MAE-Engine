@@ -185,8 +185,8 @@ def fetch_garmin_data():
 
     bb_current = None
     try:
-    summary_today = client.get_user_summary(today_str)
-    bb_current = summary_today.get("bodyBatteryMostRecentValue") if isinstance(summary_today, dict) else None
+        summary_today = client.get_user_summary(today_str)
+        bb_current = summary_today.get("bodyBatteryMostRecentValue") if isinstance(summary_today, dict) else None
     
     if bb_current is None:
         bb_today = client.get_body_battery(today_str)
