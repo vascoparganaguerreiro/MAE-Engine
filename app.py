@@ -40,7 +40,7 @@ TEXTS = {
     "Português": {
         "title": "📊 Painel Fisiológico & Auto-Regulação de Treino",
         "subtitle": "Análise multivariável em tempo real cruzando a recuperação atual com linhas de tendência de 3d, 7d e 14d.",
-        "sync_btn": "🔄 Sincronizar Fisiologia com Garmin Connect",
+        "sync_btn": "🔄 Synchronize Garmin",
         "fetching": "A consultar a nuvem Garmin e a processar tendências de 14 dias...",
         "training_readiness": "Prontidão de Treino",
         "hrv_status": "Estado do VRC (HRV)",
@@ -73,7 +73,7 @@ TEXTS = {
     "English": {
         "title": "📊 Physiological Dashboard & Workout Auto-Regulation",
         "subtitle": "Real-time multivariable analysis crossing current recovery with 3d, 7d, and 14d trendlines.",
-        "sync_btn": "🔄 Sync Physiology with Garmin Connect",
+        "sync_btn": "🔄 Synchronize Garmin",
         "fetching": "Fetching Garmin Cloud data and processing 14-day trends...",
         "training_readiness": "Training Readiness",
         "hrv_status": "HRV Status",
@@ -381,7 +381,7 @@ def fetch_garmin_data():
         "df_history": df_history
     }
 
-if st.button(t["sync_btn"]):
+if sync_pressed:
     st.cache_data.clear()
 
 with st.spinner(t["fetching"]):
