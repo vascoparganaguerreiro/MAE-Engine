@@ -81,8 +81,59 @@ TEXTS = {
 }
 
 t = TEXTS[lang]
-st.title(t["title"])
-st.markdown(t["subtitle"])
+# --- CABEÇALHO PREMIUM ---
+st.markdown("""
+<style>
+.header-title-container {
+    display: flex;
+    flex-direction: column;
+}
+.header-title {
+    font-size: 1.8rem;
+    font-weight: 800;
+    color: #FFFFFF;
+    letter-spacing: -0.02em;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.header-subtitle {
+    font-size: 0.88rem;
+    color: #9CA3AF;
+    margin-top: 4px;
+    font-weight: 400;
+    margin-bottom: 12px;
+}
+.status-badge {
+    background-color: rgba(16, 185, 129, 0.15);
+    color: #10B981;
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 3px 10px;
+    border-radius: 20px;
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+</style>
+""", unsafe_allow_html=True)
+
+col_header_left, col_header_right = st.columns([3, 1], vertical_alignment="center")
+
+with col_header_left:
+    st.markdown(f"""
+    <div class="header-title-container">
+        <div class="header-title">
+            Painel Fisiológico & Auto-Regulação
+            <span class="status-badge">● Garmin Sync</span>
+        </div>
+        <div class="header-subtitle">{t['subtitle']}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+with col_header_right:
+    sync_pressed = st.button(t["sync_btn"], use_container_width=True)
 
 EMAIL = "Vascoparganaguerreiro@gmail.com"
 PASSWORD = "Vasco1234"
