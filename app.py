@@ -188,11 +188,11 @@ def fetch_garmin_data():
         summary_today = client.get_user_summary(today_str)
         bb_current = summary_today.get("bodyBatteryMostRecentValue") if isinstance(summary_today, dict) else None
     
-    if bb_current is None:
-        bb_today = client.get_body_battery(today_str)
-        if isinstance(bb_today, list) and bb_today:
-            last_entry = bb_today[-1]
-            if isinstance(last_entry, dict):
+        if bb_current is None:
+            bb_today = client.get_body_battery(today_str)
+            if isinstance(bb_today, list) and bb_today:
+                last_entry = bb_today[-1]
+                if isinstance(last_entry, dict):
                 bb_current = last_entry.get("bodyBatteryLevel") or last_entry.get("bodyBatteryValue") or last_entry.get("value")
     except Exception:
         pass
