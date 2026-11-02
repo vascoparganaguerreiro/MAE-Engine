@@ -233,10 +233,76 @@ if st.button(t["sync_btn"]):
 with st.spinner(t["fetching"]):
     data = fetch_garmin_data()
 
+# --- CARTOES DE TOPO ESTILIZADOS ---
+st.markdown("""
+<style>
+.metric-card {
+    background-color: #1E222B;
+    border-radius: 12px;
+    padding: 18px 20px;
+    border-left: 4px solid #3B82F6;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2), 0 2px 4px -1px rgba(0, 0, 0, 0.1);
+    margin-bottom: 20px;
+}
+.metric-card.readiness {
+    border-left-color: #10B981;
+}
+.metric-card.hrv {
+    border-left-color: #8B5CF6;
+}
+.metric-card.battery {
+    border-left-color: #06B6D4;
+}
+.metric-label {
+    font-size: 0.85rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #9CA3AF;
+    margin-bottom: 6px;
+}
+.metric-value {
+    font-size: 2.1rem;
+    font-weight: 700;
+    color: #FFFFFF;
+    line-height: 1.1;
+}
+.metric-sub {
+    font-size: 0.78rem;
+    color: #6B7280;
+    margin-top: 4px;
+}
+</style>
+""", unsafe_allow_html=True)
+
 col1, col2, col3 = st.columns(3)
-col1.metric(t["training_readiness"], f"{data['training_readiness']}/100")
-col2.metric(t["hrv_status"], data['hrv_status'])
-col3.metric(t["bb_current"], f"{data['bb_current']}/100")
+
+with col1:
+    st.markdown(f"""
+    <div class="metric-card readiness">
+        <div class="metric-label">⚡ {t['training_readiness']}</div>
+        <div class="metric-value">{data['training_readiness']} <span style="font-size: 1.1rem; color: #6B7280;">/100</span></div>
+        <div class="metric-sub">Capacidade de Carga Hoje</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+with col2:
+    st.markdown(f"""
+    <div class="metric-card hrv">
+        <div class="metric-label">🫀 {t['hrv_status']}</div>
+        <div class="metric-value" style="font-size: 1.7rem;">{data['hrv_status']}</div>
+        <div class="metric-sub">Equilíbrio Autonómico</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+with col3:
+    st.markdown(f"""
+    <div class="metric-card battery">
+        <div class="metric-label">🔋 {t['bb_current']}</div>
+        <div class="metric-value">{data['bb_current']} <span style="font-size: 1.1rem; color: #6B7280;">/100</span></div>
+        <div class="metric-sub">Reserva de Energia em Tempo Real</div>
+    </div>
+    """, unsafe_allow_html=True)
 
 st.divider()
 
