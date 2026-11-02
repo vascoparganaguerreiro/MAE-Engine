@@ -168,7 +168,11 @@ def fetch_garmin_data():
 
         try:
             resp_data = client.get_respiration_data(current_date)
-            resp_hist.append(resp_data.get("avgWakingRespirationValue"))
+            resp_val = resp_data.get("avgWakingRespirationValue") or resp_data.get("avgSleepRespirationValue")
+            if resp_val is None:
+                sleep_raw = client.get_sleep_data(current_date)
+                resp_val = sleep_raw.get("dailySleepDTO", {}).get("averageRespirationValue")
+            resp_hist.append(resp_val)
         except Exception:
             resp_hist.append(None)
 
@@ -179,18 +183,28 @@ def fetch_garmin_data():
     except Exception:
         pass
 
-    bb_current = 50
+    bb_current = None
     try:
+    summary_today = client.get_user_summary(today_str)
+    bb_current = summary_today.get("bodyBatteryMostRecentValue") if isinstance(summary_today, dict) else None
+    
+    if bb_current is None:
         bb_today = client.get_body_battery(today_str)
-        if bb_today:
-            bb_current = bb_today[-1].get("charged", 50)
+        if isinstance(bb_today, list) and bb_today:
+            last_entry = bb_today[-1]
+            if isinstance(last_entry, dict):
+                bb_current = last_entry.get("bodyBatteryLevel") or last_entry.get("bodyBatteryValue") or last_entry.get("value")
     except Exception:
         pass
 
     training_readiness = "N/A"
     try:
         readiness = client.get_training_readiness(today_str)
-        training_readiness = readiness[-1].get("score", "N/A") if isinstance(readiness, list) and readiness else readiness.get("score", "N/A")
+        if isinstance(readiness, list) and readiness:
+            item = readiness[0] if isinstance(readiness[0], dict) else readiness[-1]
+            training_readiness = item.get("score") or item.get("scoreValue") or item.get("value", "N/A")
+        elif isinstance(readiness, dict):
+            training_readiness = readiness.get("score") or readiness.get("scoreValue") or readiness.get("value", "N/A")
     except Exception:
         pass
 
