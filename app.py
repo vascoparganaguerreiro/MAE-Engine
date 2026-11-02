@@ -1,5 +1,5 @@
 import streamlit as st
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 from garminconnect import Garmin
 import pandas as pd
 
@@ -7,16 +7,15 @@ import pandas as pd
 st.set_page_config(page_title="Garmin Auto-Regulation Engine", layout="wide")
 
 # ==========================================
-# SELETOR DE IDIOMA (BARRA LATERAL)
+# NAVEGAÇÃO & IDIOMA (BARRA LATERAL)
 # ==========================================
-lang = st.sidebar.selectbox("🌐 Select Language / Selecionar Língua", ["Português", "English"])
-# ==========================================
-# GESTÃO DINÂMICA DE EVENTOS (BARRA LATERAL)
-# ==========================================
-st.sidebar.markdown("---")
-st.sidebar.markdown("### 🎯 Eventos & Objetivos")
+st.sidebar.title("📌 Navegação")
+page = st.sidebar.radio("Ir para:", ["📊 Dashboard Fisiológico", "🎯 Goals & Eventos"])
 
-# Inicializa os teus eventos no session_state se ainda não existirem
+st.sidebar.markdown("---")
+lang = st.sidebar.selectbox("🌐 Select Language / Selecionar Língua", ["Português", "English"])
+
+# Inicialização dos 4 eventos padrão na sessão
 if "user_events" not in st.session_state:
     st.session_state.user_events = [
         {"name": "10K Prova de Dezembro", "date": date(2026, 12, 15)},
@@ -24,39 +23,6 @@ if "user_events" not in st.session_state:
         {"name": "Triatlo Olímpico", "date": date(2027, 9, 12)},
         {"name": "IRONMAN 70.3 Cascais", "date": date(2027, 10, 17)}
     ]
-
-# Botão para adicionar novos spots (até 15)
-if len(st.session_state.user_events) < 15:
-    if st.sidebar.button("➕ Adicionar Novo Evento", use_container_width=True):
-        st.session_state.user_events.append({
-            "name": f"Novo Evento {len(st.session_state.user_events) + 1}",
-            "date": date.today() + timedelta(days=90)
-        })
-        st.rerun()
-
-st.sidebar.caption(f"Eventos ativos: {len(st.session_state.user_events)} / 15")
-
-# Formularos para editar ou remover cada evento
-events_to_remove = []
-for idx, ev in enumerate(st.session_state.user_events):
-    with st.sidebar.expander(f"📌 {ev['name']}", expanded=(idx == 0)):
-        col_ev_name, col_ev_del = st.columns([4, 1])
-        with col_ev_name:
-            new_name = st.text_input(f"Nome #{idx+1}:", value=ev["name"], key=f"ev_name_{idx}")
-        with col_ev_del:
-            st.write("")
-            if st.button("🗑️", key=f"del_ev_{idx}", help="Apagar este evento"):
-                events_to_remove.append(idx)
-        
-        new_date = st.date_input(f"Data:", value=ev["date"], key=f"ev_date_{idx}")
-        
-        st.session_state.user_events[idx]["name"] = new_name
-        st.session_state.user_events[idx]["date"] = new_date
-
-if events_to_remove:
-    for idx in sorted(events_to_remove, reverse=True):
-        st.session_state.user_events.pop(idx)
-    st.rerun()
 
 # Seletor do Objetivo Corporal
 st.sidebar.markdown("---")
@@ -140,6 +106,77 @@ TEXTS = {
 }
 
 t = TEXTS[lang]
+# ==========================================
+# PÁGINA 2: GOALS & EVENTOS DEDICADA
+# ==========================================
+if page == "🎯 Goals & Eventos":
+    st.title("🎯 Central de Eventos & Objetivos")
+    st.markdown("Gestão cronológica de provas alvo com contagem decrescente em tempo real.")
+    st.markdown("---")
+
+    now = datetime.now()
+    sorted_events = sorted(st.session_state.user_events, key=lambda x: x["date"])
+
+    if sorted_events:
+        next_event = sorted_events[0]
+        event_dt = datetime.combine(next_event["date"], datetime.min.time())
+        delta = event_dt - now
+        days_left = max(0, delta.days)
+        hours_left = max(0, delta.seconds // 3600)
+
+        # Cartão Destaque Gigante do Próximo Evento
+        st.markdown(f"""
+        <div style="background: linear-gradient(135deg, #1E222B 0%, #111827 100%); border-radius: 16px; padding: 26px; border: 2px solid #10B981; margin-bottom: 24px; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.3);">
+            <div style="color: #10B981; font-size: 0.85rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em;">PRÓXIMO DESAFIO PRINCIPAL</div>
+            <div style="color: #FFFFFF; font-size: 2.2rem; font-weight: 900; margin: 6px 0;">🏆 {next_event['name']}</div>
+            <div style="color: #9CA3AF; font-size: 0.95rem; margin-bottom: 18px;">📅 {next_event['date'].strftime('%d/%m/%Y')}</div>
+            <div style="display: flex; gap: 16px;">
+                <div style="background-color: rgba(16, 185, 129, 0.15); padding: 10px 22px; border-radius: 10px; border: 1px solid rgba(16, 185, 129, 0.3);">
+                    <span style="color: #10B981; font-size: 1.8rem; font-weight: 900;">{days_left}</span>
+                    <span style="color: #9CA3AF; font-size: 0.85rem; font-weight: 600; margin-left: 4px;">Dias</span>
+                </div>
+                <div style="background-color: rgba(16, 185, 129, 0.15); padding: 10px 22px; border-radius: 10px; border: 1px solid rgba(16, 185, 129, 0.3);">
+                    <span style="color: #10B981; font-size: 1.8rem; font-weight: 900;">{hours_left}</span>
+                    <span style="color: #9CA3AF; font-size: 0.85rem; font-weight: 600; margin-left: 4px;">Horas</span>
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # Lista Cronológica de Eventos Futuros
+    st.subheader("📅 Cronograma Completo de Provas")
+    for ev in sorted_events:
+        event_dt = datetime.combine(ev["date"], datetime.min.time())
+        d_left = max(0, (event_dt - now).days)
+        h_left = max(0, (event_dt - now).seconds // 3600)
+        
+        col_n, col_d, col_t = st.columns([3, 2, 2])
+        col_n.markdown(f"**📌 {ev['name']}**")
+        col_d.caption(f"🗓️ {ev['date'].strftime('%d/%m/%Y')}")
+        col_t.markdown(f"⏱️ **{d_left}d {h_left}h restantes**")
+        st.divider()
+
+    # Painel para Adicionar/Editar Eventos (Até 15)
+    with st.expander("⚙️ Gerir Lista de Eventos (Adicionar / Eliminar)"):
+        if len(st.session_state.user_events) < 15:
+            if st.button("➕ Adicionar Novo Evento", use_container_width=True):
+                st.session_state.user_events.append({"name": f"Novo Evento {len(st.session_state.user_events)+1}", "date": date.today() + timedelta(days=90)})
+                st.rerun()
+
+        events_to_remove = []
+        for idx, ev in enumerate(st.session_state.user_events):
+            c1, c2, c3 = st.columns([3, 2, 1])
+            st.session_state.user_events[idx]["name"] = c1.text_input(f"Nome #{idx+1}", value=ev["name"], key=f"g_name_{idx}")
+            st.session_state.user_events[idx]["date"] = c2.date_input(f"Data #{idx+1}", value=ev["date"], key=f"g_date_{idx}")
+            if c3.button("🗑️", key=f"g_del_{idx}"):
+                events_to_remove.append(idx)
+        
+        if events_to_remove:
+            for idx in sorted(events_to_remove, reverse=True):
+                st.session_state.user_events.pop(idx)
+            st.rerun()
+
+else:
 # --- CABEÇALHO PREMIUM ---
 st.markdown("""
 <style>
