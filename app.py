@@ -117,7 +117,7 @@ if page == "🎯 Goals & Eventos":
     now = datetime.now()
     sorted_events = sorted(st.session_state.user_events, key=lambda x: x["date"])
 
-  if sorted_events:
+    if sorted_events:
         next_event = sorted_events[0]
         event_dt = datetime.combine(next_event["date"], datetime.min.time())
         delta = event_dt - now
