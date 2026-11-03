@@ -1,4 +1,4 @@
-Dimport streamlit as st
+import streamlit as st
 from datetime import date, timedelta, datetime
 from garminconnect import Garmin
 import pandas as pd
