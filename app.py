@@ -464,34 +464,34 @@ def fetch_garmin_data():
             training_readiness = readiness.get("score") or readiness.get("scoreValue") or readiness.get("value", "N/A")
     except Exception:
         pass
-        # --- Puxar Histórico Real da Balança Garmin Index S2 ---
-        today_str = today.strftime("%Y-%m-%d")
-        start_body_date = (today - timedelta(days=30)).strftime("%Y-%m-%d")
-        try:
-            body_comp_raw = client.get_body_composition(start_body_date, today_str)
-            weight_list = body_comp_raw.get("dateWeightList", []) if isinstance(body_comp_raw, dict) else (body_comp_raw if isinstance(body_comp_raw, list) else [])
+       # --- Puxar Histórico Real da Balança Garmin Index S2 ---
+    today_str = today.strftime("%Y-%m-%d")
+    start_body_date = (today - timedelta(days=30)).strftime("%Y-%m-%d")
+    try:
+        body_comp_raw = client.get_body_composition(start_body_date, today_str)
+        weight_list = body_comp_raw.get("dateWeightList", []) if isinstance(body_comp_raw, dict) else (body_comp_raw if isinstance(body_comp_raw, list) else [])
         
-            for record in weight_list:
-                if isinstance(record, dict):
-                    raw_date = record.get("samplePk") or record.get("date") or record.get("calendarDate")
-                    dt_str = str(raw_date)[:10] if raw_date else None
+        for record in weight_list:
+            if isinstance(record, dict):
+                raw_date = record.get("samplePk") or record.get("date") or record.get("calendarDate")
+                dt_str = str(raw_date)[:10] if raw_date else None
                 
-                    w_kg = record.get("weight", 0) / 1000.0 if record.get("weight", 0) > 200 else record.get("weight")
-                    fat_pct = record.get("bodyFat")
-                    muscle_kg = record.get("muscleMass", 0) / 1000.0 if record.get("muscleMass", 0) > 200 else record.get("muscleMass")
-                    water_pct = record.get("bodyWater")
-                    bone_kg = record.get("boneMass", 0) / 1000.0 if record.get("boneMass", 0) > 200 else record.get("boneMass")
-                    bmi_val = record.get("bmi")
+                w_kg = record.get("weight", 0) / 1000.0 if record.get("weight", 0) > 200 else record.get("weight")
+                fat_pct = record.get("bodyFat")
+                muscle_kg = record.get("muscleMass", 0) / 1000.0 if record.get("muscleMass", 0) > 200 else record.get("muscleMass")
+                water_pct = record.get("bodyWater")
+                bone_kg = record.get("boneMass", 0) / 1000.0 if record.get("boneMass", 0) > 200 else record.get("boneMass")
+                bmi_val = record.get("bmi")
                 
-                    if dt_str and w_kg:
-                        body_records.append({
-                            "Data": dt_str,
-                            "Peso (kg)": round(w_kg, 1),
-                            "Gordura Corporal (%)": round(fat_pct, 1) if fat_pct else None,
-                            "Massa Muscular (kg)": round(muscle_kg, 1) if muscle_kg else None,
-                            "Água Corporal (%)": round(water_pct, 1) if water_pct else None,
-                            "Massa Óssea (kg)": round(bone_kg, 1) if bone_kg else None,
-                            "IMC": round(bmi_val, 1) if bmi_val else None
+                if dt_str and w_kg:
+                    body_records.append({
+                        "Data": dt_str,
+                        "Peso (kg)": round(w_kg, 1),
+                        "Gordura Corporal (%)": round(fat_pct, 1) if fat_pct else None,
+                        "Massa Muscular (kg)": round(muscle_kg, 1) if muscle_kg else None,
+                        "Água Corporal (%)": round(water_pct, 1) if water_pct else None,
+                        "Massa Óssea (kg)": round(bone_kg, 1) if bone_kg else None,
+                        "IMC": round(bmi_val, 1) if bmi_val else None
                     })
     except Exception:
         pass
