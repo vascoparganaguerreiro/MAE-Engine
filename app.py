@@ -187,11 +187,13 @@ if top_nav == "📌 Today / Decisão Diária":
 
     if slope_info["slope"] < -0.15:
         st.error(f"⚠️ **Alerta de Drift:** Tendência descendente no VRC há 3 semanas ({slope_info['slope']} ms/dia). Considera deload.")
-
-    if score >= 70 or st.session_state.override_train: card_class, text = "hero-card-green", t("today_decision_green", lang)
-    elif score >= 45: card_class, text = "hero-card-amber", t("today_decision_amber", lang)
-    else: card_class, text = "hero-card-red", t("today_decision_red", lang)
-
+        
+    if score >= 70 or st.session_state.override_train: 
+        card_class, text = "hero-card-green", "Dia de Treino Normal: Capacidade Total"
+    elif score >= 45: 
+        card_class, text = "hero-card-amber", "Dia Moderado: Reduzir Carga Axial e Intensidade"
+    else: 
+        card_class, text = "hero-card-red", "Dia de Recuperação Ativa: Preservar o Sistema Nervoso"
     st.markdown(f"""
     <div class="{card_class}">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
