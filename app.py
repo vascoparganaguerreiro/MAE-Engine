@@ -10,7 +10,16 @@ st.set_page_config(page_title="Garmin Auto-Regulation Engine", layout="wide")
 # NAVEGAÇÃO & IDIOMA (BARRA LATERAL)
 # ==========================================
 st.sidebar.title("📌 Navegação")
-page = st.sidebar.radio("Ir para:", ["📊 Dashboard Fisiológico", "🎯 Goals & Eventos"])
+page = st.sidebar.radio(
+    "Ir para:",
+    [
+        "📊 Dashboard Fisiológico",
+        "🎯 Goals & Eventos",
+        "😴 Sono & Recuperação Avançada",
+        "⚖️ Composição Corporal & Peso",
+        "📜 Histórico de Treinos & Análise"
+    ]
+)
 
 st.sidebar.markdown("---")
 lang = st.sidebar.selectbox("🌐 Select Language / Selecionar Língua", ["Português", "English"])
