@@ -221,52 +221,59 @@ if page == "⚖️ Composição Corporal & Peso":
     st.title("⚖️ Composição Corporal & Peso (Garmin Index S2)")
     st.markdown("Acompanhamento interativo da bioimpedância e tendências de composição corporal.")
     
-    # 1. Dados Reais Sincronizados da Balança Garmin
-    # Estrutura histórica para alimentação direta ou via API
-    body_data = pd.DataFrame({
-        "Data": ["01/11", "02/11"],
-        "Peso (kg)": [79.3, 78.7],
-        "Gordura Corporal (%)": [13.0, 13.6],
-        "Massa Muscular (kg)": [34.8, 34.7],
-        "Água Corporal (%)": [63.5, 63.1],
-        "Massa Óssea (kg)": [6.0, 5.9],
-        "IMC": [23.2, 23.0]
-    }).set_index("Data")
-
-    latest = body_data.iloc[-1]
-    prev = body_data.iloc[-2]
-
-    # Cartões de Resumo com Métricas Reais
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Peso Atual", f"{latest['Peso (kg)']} kg", f"{round(latest['Peso (kg)'] - prev['Peso (kg)'], 1)} kg")
-    c2.metric("% Gordura", f"{latest['Gordura Corporal (%)']}%", f"{round(latest['Gordura Corporal (%)'] - prev['Gordura Corporal (%)'], 1)}%")
-    c3.metric("Massa Muscular", f"{latest['Massa Muscular (kg)']} kg", f"{round(latest['Massa Muscular (kg)'] - prev['Massa Muscular (kg)'], 1)} kg")
-    c4.metric("Água Corporal", f"{latest['Água Corporal (%)']}%", f"{round(latest['Água Corporal (%)'] - prev['Água Corporal (%)'], 1)}%")
-
-    st.divider()
-
-    # 2. Seletor de Métricas Personalizado (Gráfico Estilo Garmin)
-    st.subheader("📈 Análise de Tendências Personalizada")
-    st.caption("Seleciona uma ou mais métricas para cruzar no mesmo gráfico (ex: Massa Muscular + % Gordura).")
-
-    available_metrics = list(body_data.columns)
+    # Puxa o histórico real sincronizado da Garmin
+    records = data.get("body_records", [])
     
-    selected_metrics = st.multiselect(
-        "Métricas a exibir no gráfico:",
-        options=available_metrics,
-        default=["Gordura Corporal (%)", "Massa Muscular (kg)"]
-    )
+    if records:
+        df_body = pd.DataFrame(records).sort_values("Data").set_index("Data")
+        
+        latest = df_body.iloc[-1]
+        prev = df_body.iloc[-2] if len(df_body) > 1 else latest
 
-    if selected_metrics:
-        st.line_chart(body_data[selected_metrics])
+        # Cartões de Resumo Dinâmicos
+        c1, c2, c3, c4 = st.columns(4)
+        
+        w_delta = round(latest['Peso (kg)'] - prev['Peso (kg)'], 1) if len(df_body) > 1 else None
+        c1.metric("Peso Atual", f"{latest['Peso (kg)']} kg", f"{w_delta} kg" if w_delta is not None else None)
+        
+        fat_val = f"{latest['Gordura Corporal (%)']}%" if pd.notnull(latest['Gordura Corporal (%)']) else "N/A"
+        fat_delta = f"{round(latest['Gordura Corporal (%)'] - prev['Gordura Corporal (%)'], 1)}%" if len(df_body) > 1 and pd.notnull(latest['Gordura Corporal (%)']) else None
+        c2.metric("% Gordura", fat_val, fat_delta)
+        
+        musc_val = f"{latest['Massa Muscular (kg)']} kg" if pd.notnull(latest['Massa Muscular (kg)']) else "N/A"
+        musc_delta = f"{round(latest['Massa Muscular (kg)'] - prev['Massa Muscular (kg)'], 1)} kg" if len(df_body) > 1 and pd.notnull(latest['Massa Muscular (kg)']) else None
+        c3.metric("Massa Muscular", musc_val, musc_delta)
+        
+        water_val = f"{latest['Água Corporal (%)']}%" if pd.notnull(latest['Água Corporal (%)']) else "N/A"
+        c4.metric("Água Corporal", water_val)
+
+        st.divider()
+
+        # Seletor de Métricas Multivariável (Gráfico Estilo Garmin)
+        st.subheader("📈 Análise de Tendências Personalizada")
+        st.caption("Seleciona uma ou mais métricas para cruzar no mesmo gráfico (ex: Massa Muscular + % Gordura).")
+
+        available_metrics = list(df_body.columns)
+        
+        selected_metrics = st.multiselect(
+            "Métricas a exibir no gráfico:",
+            options=available_metrics,
+            default=["Gordura Corporal (%)", "Massa Muscular (kg)"] if "Gordura Corporal (%)" in available_metrics else available_metrics[:2]
+        )
+
+        if selected_metrics:
+            st.line_chart(df_body[selected_metrics])
+        else:
+            st.warning("Selecione pelo menos uma métrica para exibir o gráfico.")
+
+        st.divider()
+
+        # Tabela Histórica Completa Real
+        st.subheader("📋 Histórico Registado da Balança Index S2")
+        st.dataframe(df_body, use_container_width=True)
+
     else:
-        st.warning("Selecione pelo menos uma métrica para exibir o gráfico.")
-
-    st.divider()
-
-    # 3. Tabela Histórica Completa de Bioimpedância
-    st.subheader("📋 Histórico Registado da Balança Index S2")
-    st.dataframe(body_data, use_container_width=True)
+        st.info("ℹ️ Não foram encontrados registos de composição corporal da balança Garmin Index S2.")
 
     st.stop()
 
