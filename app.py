@@ -109,9 +109,9 @@ if "garmin_email" not in st.session_state:
 if "garmin_pass" not in st.session_state:
     st.session_state.garmin_pass = "Vasco1234"
 if "lang" not in st.session_state:
-    st.session_state.lang = "PT"
+    st.session_state.lang = "Português"
 if "user_mode" not in st.session_state:
-    st.session_state.user_mode = "Atleta de Alto Rendimento"
+    st.session_state.user_mode = "🏃 Atleta de Alto Rendimento"
 if "time_window" not in st.session_state:
     st.session_state.time_window = 14
 if "chat_history" not in st.session_state:
@@ -129,24 +129,29 @@ if "user_events" not in st.session_state:
     ]
 
 # ==========================================
-# BARRA LATERAL REDESENHADA (SIDEBAR PREMIUM)
+# BARRA LATERAL CORRIGIDA (SIDEBAR PREMIUM)
 # ==========================================
 
-# 14. Header Discreto com Alternador de Idioma (PT | EN)
-sb_head_left, sb_head_right = st.sidebar.columns([3, 2])
-with sb_head_left:
-    st.markdown("### ⚡ **Apex Engine**")
-with sb_head_right:
-    c_pt, c_en = st.columns(2)
-    if c_pt.button("PT", use_container_width=True, type="primary" if st.session_state.lang == "PT" else "secondary"):
-        st.session_state.lang = "PT"; st.rerun()
-    if c_en.button("EN", use_container_width=True, type="primary" if st.session_state.lang == "EN" else "secondary"):
-        st.session_state.lang = "EN"; st.rerun()
-
+st.sidebar.markdown("### ⚡ **Apex Engine**")
 st.sidebar.caption("Longevidade, Performance & Auto-Regulação")
+
+# Seletor de Idioma Limpo
+selected_lang = st.sidebar.selectbox("🌐 Idioma / Language:", ["Português", "English"], index=0 if st.session_state.lang == "Português" else 1)
+st.session_state.lang = selected_lang
+
+# Seletor Claro do Modo de Análise (Atleta vs. Saúde/Longevidade)
+st.sidebar.markdown("🎯 **Modo de Análise Ativo:**")
+selected_user_mode = st.sidebar.radio(
+    "Perfil de Fisiologia:",
+    ["🏃 Atleta de Alto Rendimento", "🧬 Saúde & Longevidade Metabólica"],
+    index=0 if "Atleta" in st.session_state.user_mode else 1,
+    label_visibility="collapsed"
+)
+st.session_state.user_mode = selected_user_mode
+
 st.sidebar.markdown("---")
 
-# 5. Seletor de Janela Temporal Global
+# Seletor de Janela Temporal Global
 st.sidebar.markdown("##### 📅 **Janela Temporal Global**")
 time_opt = st.sidebar.select_slider(
     "Período de Análise:",
@@ -156,7 +161,7 @@ time_opt = st.sidebar.select_slider(
 )
 st.session_state.time_window = time_opt
 
-# 3. Widget de Estado de Conexão Live Garmin (Garmin Sync Status)
+# Widget de Conexão Garmin Connect Status
 with st.sidebar.expander("👤 **Garmin Connect Status**", expanded=not st.session_state.garmin_logged_in):
     if st.session_state.garmin_logged_in:
         st.markdown(f"<div class='sync-pill'>● Live Sync Ativo</div>", unsafe_allow_html=True)
@@ -186,7 +191,7 @@ with st.sidebar.expander("👤 **Garmin Connect Status**", expanded=not st.sessi
 
 st.sidebar.markdown("---")
 
-# 1 & 2. Navegação Estruturada por Pilares Temáticos (Categorias Expansíveis)
+# Navegação Estruturada por Pilares Temáticos
 st.sidebar.markdown("##### 🧭 **Navegação de Módulos**")
 
 module_category = st.sidebar.radio(
@@ -228,28 +233,28 @@ else:
 
 st.sidebar.markdown("---")
 
-# 4. Perfil de Atleta & Configurações de Fisiologia Base
+# Perfil de Atleta & Configurações de Fisiologia Base
 with st.sidebar.expander("⚙️ **Fisiologia Base & Zonas**"):
     st.number_input("Idade:", min_value=15, max_value=90, value=24, key="user_age")
     st.number_input("FC Máxima (bpm):", min_value=140, max_value=220, value=192, key="user_hr_max")
     st.number_input("FTP / Limiar (Watts):", min_value=100, max_value=500, value=280, key="user_ftp")
     st.number_input("VO2 Máx Estimado (mL/kg/min):", min_value=30, max_value=85, value=62, key="user_vo2max")
 
-# 10. Mini-Calculadora Rápida de Ritmos e Zonas (Quick Widget)
+# Mini-Calculadora Rápida de Ritmos e Zonas
 with st.sidebar.expander("⏱️ **Quick Pacing & Zone Calculator**"):
     calc_pace_min = st.number_input("Min/km:", min_value=2.0, max_value=10.0, value=4.25, step=0.05)
     calc_speed = round(60.0 / calc_pace_min, 2)
     st.caption(f"Velocidade: **{calc_speed} km/h**")
     st.caption(f"Estimativa 10K: **{int(calc_pace_min*10)} min {int((calc_pace_min*10%1)*60):02d}s**")
 
-# 13. Módulo de Registo de Sintomas Biológicos & Subjetivos (RPE / Humor)
+# Módulo de Registo de Sintomas Subjetivos
 with st.sidebar.expander("📝 **Diário Subjetivo (Humor & Soreness)**"):
     soreness_val = st.slider("Dor Muscular (Soreness):", 1, 5, 2, help="1 = Sem dor, 5 = Dor extrema")
     mood_val = st.slider("Motivação / Humor:", 1, 5, 4, help="1 = Sem motivação, 5 = Excelente")
     stress_psych = st.slider("Stress Mental Fora do Treino:", 1, 5, 2)
     st.session_state.subjetive_score = (mood_val * 2) - soreness_val - stress_psych
 
-# 8. Coach IA Apex (Gemini) na Sidebar
+# Coach IA Apex (Gemini) na Sidebar
 with st.sidebar.expander("🤖 **Coach IA Apex (Gemini)**"):
     api_key_input = st.text_input("Chave API Gemini:", type="password", key="gemini_key_input")
     if api_key_input:
@@ -258,7 +263,7 @@ with st.sidebar.expander("🤖 **Coach IA Apex (Gemini)**"):
             try:
                 genai.configure(api_key=api_key_input)
                 model = genai.GenerativeModel('gemini-1.5-flash')
-                contexto = f"Utilizador: {st.session_state.garmin_email} | Janela: {st.session_state.time_window}d | Subjetivo: {st.session_state.get('subjetive_score', 0)}"
+                contexto = f"Utilizador: {st.session_state.garmin_email} | Modo: {st.session_state.user_mode} | Janela: {st.session_state.time_window}d"
                 response = model.generate_content(f"{contexto}\n\nPergunta: {user_msg}")
                 st.session_state.chat_history.append(("Você", user_msg))
                 st.session_state.chat_history.append(("Coach IA", response.text))
@@ -291,7 +296,6 @@ def fetch_garmin_data_user(email, password, days_count):
     dates_list = []
     body_records = []
 
-    # Extração Cronológica com Janela Temporal Dinâmica
     for days_back in range(days_count - 1, -1, -1):
         current_date_obj = today - timedelta(days=days_back)
         current_date = current_date_obj.strftime("%Y-%m-%d")
@@ -435,7 +439,7 @@ if page == "⚡ Command Center (Visão Geral)":
     col_h1, col_h2 = st.columns([3, 1], vertical_alignment="center")
     with col_h1:
         st.title("⚡ Command Center")
-        st.caption(f"Visão executiva e biomarcadores essenciais (Janela Ativa: {st.session_state.time_window} Dias).")
+        st.caption(f"Visão executiva em modo **{st.session_state.user_mode}** (Janela: {st.session_state.time_window}d).")
     with col_h2:
         if st.button("🔄 Sincronizar Garmin", use_container_width=True):
             st.cache_data.clear(); st.rerun()
@@ -443,7 +447,6 @@ if page == "⚡ Command Center (Visão Geral)":
     readiness_val = data['training_readiness'] if isinstance(data['training_readiness'], (int, float)) else 50
     vrc_status = data['hrv_status']
     
-    # 9. Readiness Badge Visual
     readiness_badge_color = "#10B981" if readiness_val >= 70 else ("#F59E0B" if readiness_val >= 45 else "#EF4444")
 
     banner_class = "status-banner-green" if readiness_val >= 70 and vrc_status == "BALANCED" else ("status-banner-amber" if readiness_val >= 45 else "status-banner-red")
@@ -456,15 +459,14 @@ if page == "⚡ Command Center (Visão Geral)":
             <span style="background: {readiness_badge_color}; color: #000; padding: 4px 12px; border-radius: 12px; font-weight: 800; font-size: 0.85rem;">PRONTIDÃO: {readiness_val}/100</span>
         </div>
         <div style="font-size: 0.92rem; line-height: 1.5; color: #E2E8F0;">
+            • <b>Perfil Ativo:</b> {st.session_state.user_mode}<br>
             • <b>Apetite de Carga:</b> VRC Noturno em <b>{data['hrv'][0]} ms</b> (Status: {vrc_status}).<br>
             • <b>Arquitetura de Sono:</b> Pontuação de <b>{data['sleep'][0]}/100</b> (Profundo: {format_seconds_to_hhmm(data['deep_sleep_today'])} | REM: {format_seconds_to_hhmm(data['rem_sleep_today'])}).<br>
-            • <b>Fator Subjetivo (Diário):</b> Score de Prontidão Mental em <b>{st.session_state.get('subjetive_score', 0)} pts</b>.<br>
             • <b>Recomendação Adaptativa:</b> {'Estímulo autorizado para VO2 Max ou Limiar de Lactato (Z4/Z5).' if readiness_val >= 70 else 'Priorizar acumulação aeróbica em Zona 2 ou treino de força funcional sem carga na coluna.'}
         </div>
     </div>
     """, unsafe_allow_html=True)
 
-    # Cartões Principais (Main Details)
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         st.markdown(f"""<div class="metric-card-exec"><div class="metric-label-exec">⚡ Prontidão de Treino</div><div class="metric-value-exec">{data['training_readiness']} <span style="font-size:1rem; color:#64748B;">/100</span></div><div class="metric-sub-exec">Capacidade Metabólica</div></div>""", unsafe_allow_html=True)
@@ -477,7 +479,6 @@ if page == "⚡ Command Center (Visão Geral)":
 
     st.divider()
 
-    # Biomarcadores de Longevidade
     latest_body = data['body_records'][-1] if data['body_records'] else None
     st.subheader("📌 Biomarcadores de Longevidade & Saúde Metabólica")
     m1, m2, m3, m4 = st.columns(4)
@@ -488,7 +489,6 @@ if page == "⚡ Command Center (Visão Geral)":
 
     st.divider()
 
-    # Gráfico Histórico com Eixos Específicos
     if not data["df_history"].empty:
         st.subheader(f"📈 Curvas Fisiológicas ({st.session_state.time_window} Dias - Cronológico)")
         tab_vrc, tab_sleep, tab_rhr = st.tabs(["🫀 VRC Noturno (ms)", "😴 Pontuação de Sono", "❤️ FC Repouso (bpm)"])
