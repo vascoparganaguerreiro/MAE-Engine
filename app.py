@@ -1,4 +1,4 @@
-import streamlit as st
+Dimport streamlit as st
 from datetime import date, timedelta, datetime
 from garminconnect import Garmin
 import pandas as pd
@@ -222,7 +222,7 @@ def fetch_garmin_data():
     except Exception:
         pass
 
-    # 2. Puxar Histórico Real da Balança Garmin Index S2 (Janela alargada de 90 Dias)
+   # 2. Puxar Histórico Real da Balança Garmin Index S2 (Janela alargada de 90 Dias)
     start_body_date = (today - timedelta(days=90)).strftime("%Y-%m-%d")
     try:
         body_comp_raw = client.get_body_composition(start_body_date, today_str)
@@ -230,8 +230,16 @@ def fetch_garmin_data():
         
         for record in weight_list:
             if isinstance(record, dict):
-                raw_date = record.get("samplePk") or record.get("date") or record.get("calendarDate")
-                dt_str = str(raw_date)[:10] if raw_date else None
+                # Conversão correta da data (trata timestamps numéricos e strings ISO)
+                raw_date = record.get("calendarDate") or record.get("date") or record.get("samplePk")
+                dt_str = None
+                
+                if raw_date:
+                    if isinstance(raw_date, (int, float)) or (isinstance(raw_date, str) and str(raw_date).isdigit()):
+                        ts = int(raw_date) / 1000.0 if int(raw_date) > 1e11 else int(raw_date)
+                        dt_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+                    else:
+                        dt_str = str(raw_date)[:10]
                 
                 w_kg = record.get("weight", 0) / 1000.0 if record.get("weight", 0) > 200 else record.get("weight")
                 fat_pct = record.get("bodyFat")
@@ -240,15 +248,16 @@ def fetch_garmin_data():
                 bone_kg = record.get("boneMass", 0) / 1000.0 if record.get("boneMass", 0) > 200 else record.get("boneMass")
                 bmi_val = record.get("bmi")
                 
-                if dt_str and w_kg:
+                # Ignora zeros para não estragar o gráfico
+                if dt_str and w_kg and w_kg > 0:
                     body_records.append({
                         "Data": dt_str,
                         "Peso (kg)": round(w_kg, 1),
-                        "Gordura Corporal (%)": round(fat_pct, 1) if fat_pct is not None else None,
-                        "Massa Muscular (kg)": round(muscle_kg, 1) if muscle_kg is not None else None,
-                        "Água Corporal (%)": round(water_pct, 1) if water_pct is not None else None,
-                        "Massa Óssea (kg)": round(bone_kg, 1) if bone_kg is not None else None,
-                        "IMC": round(bmi_val, 1) if bmi_val is not None else None
+                        "Gordura Corporal (%)": round(fat_pct, 1) if fat_pct and fat_pct > 0 else None,
+                        "Massa Muscular (kg)": round(muscle_kg, 1) if muscle_kg and muscle_kg > 0 else None,
+                        "Água Corporal (%)": round(water_pct, 1) if water_pct and water_pct > 0 else None,
+                        "Massa Óssea (kg)": round(bone_kg, 1) if bone_kg and bone_kg > 0 else None,
+                        "IMC": round(bmi_val, 1) if bmi_val and bmi_val > 0 else None
                     })
     except Exception:
         pass
