@@ -104,6 +104,12 @@ TEXTS = {
 
 t = TEXTS[lang]
 # ==========================================
+# PÁGINA 1: DASHBOARD FISIOLÓGICO DA GARMIN
+# ==========================================
+if page == "📊 Dashboard Fisiológico":
+
+st.stop()
+# ==========================================
 # PÁGINA 2: GOALS & EVENTOS DEDICADA
 # ==========================================
 if page == "🎯 Goals & Eventos":
@@ -694,4 +700,57 @@ elif "Brick" in category:
     st.info("🧱 **Sessão Transição (Ciclismo + Corrida)**")
     bike_t = int(avail_time * 0.7)
     run_t = int(avail_time * 0.3)
+# ==========================================
+# PÁGINA 3: SONO & RECUPERAÇÃO AVANÇADA
+# ==========================================
+if page == "😴 Sono & Recuperação Avançada":
+    st.title("😴 Sono & Recuperação Avançada")
+    st.markdown("Análise da arquitetura do sono (REM, Profundo, Leve) e métricas noturnas da Garmin.")
+    
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Sono Total", "7h 45m", "+12m vs média")
+    c2.metric("Sono Profundo", "1h 20m", "17%")
+    c3.metric("Sono REM", "1h 50m", "24%")
+    c4.metric("Pontuação de Sono", "82/100", "Bom")
+    
+    st.info("💡 A integração detalhada da arquitetura de sono via Garmin Connect será renderizada aqui.")
+    st.stop()
+
+# ==========================================
+# PÁGINA 4: COMPOSIÇÃO CORPORAL & PESO
+# ==========================================
+if page == "⚖️ Composição Corporal & Peso":
+    st.title("⚖️ Composição Corporal & Peso")
+    st.markdown("Monitorização de peso e bioimpedância sincronizada com a Garmin Index S2.")
+    
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Peso Atual", "78.5 kg", "-0.3 kg")
+    c2.metric("% Gordura Corporal", "12.4%", "-0.1%")
+    c3.metric("Massa Magra", "65.2 kg", "+0.1 kg")
+    c4.metric("Água Corporal", "61.2%", "Ideal")
+    
+    st.info("💡 As curvas de tendência de peso e percentagem de gordura serão renderizadas aqui.")
+    st.stop()
+
+# ==========================================
+# PÁGINA 5: HISTÓRICO DE TREINOS & ANÁLISE
+# ==========================================
+if page == "📜 Histórico de Treinos & Análise":
+    st.title("📜 Histórico de Treinos & Análise de Provas")
+    st.markdown("Filtra e analisa as tuas sessões passadas por modalidade e janela temporal.")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        start_d = st.date_input("Data Inicial", value=date.today() - timedelta(days=30))
+    with col2:
+        end_d = st.date_input("Data Final", value=date.today())
+        
+    sport_filter = st.multiselect(
+        "Filtrar por Modalidade:",
+        ["Corrida", "Ciclismo", "Natação", "Musculação / Ginásio"],
+        default=["Corrida", "Ciclismo", "Natação", "Musculação / Ginásio"]
+    )
+    
+    st.info("💡 A tabela filtrada com parciais e volume acumulado de treino será renderizada aqui.")
+    st.stop()
     st.success(f"• **Sessão:** {bike_t} min Ciclismo Z2/Z3 ➔ Transição (T2) ➔ {run_t} min Corrida Z2.")
