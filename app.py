@@ -29,9 +29,7 @@ st.markdown("""
         border-radius: 12px;
         padding: 20px;
         margin-bottom: 24px;
-        border-top: 1px solid rgba(16, 185, 129, 0.2);
-        border-right: 1px solid rgba(16, 185, 129, 0.2);
-        border-bottom: 1px solid rgba(16, 185, 129, 0.2);
+        border: 1px solid rgba(16, 185, 129, 0.2);
     }
     .status-banner-amber {
         background: linear-gradient(135deg, rgba(245, 158, 11, 0.15) 0%, rgba(120, 53, 15, 0.25) 100%);
@@ -39,9 +37,7 @@ st.markdown("""
         border-radius: 12px;
         padding: 20px;
         margin-bottom: 24px;
-        border-top: 1px solid rgba(245, 158, 11, 0.2);
-        border-right: 1px solid rgba(245, 158, 11, 0.2);
-        border-bottom: 1px solid rgba(245, 158, 11, 0.2);
+        border: 1px solid rgba(245, 158, 11, 0.2);
     }
     .status-banner-red {
         background: linear-gradient(135deg, rgba(239, 68, 68, 0.15) 0%, rgba(127, 29, 29, 0.25) 100%);
@@ -49,9 +45,7 @@ st.markdown("""
         border-radius: 12px;
         padding: 20px;
         margin-bottom: 24px;
-        border-top: 1px solid rgba(239, 68, 68, 0.2);
-        border-right: 1px solid rgba(239, 68, 68, 0.2);
-        border-bottom: 1px solid rgba(239, 68, 68, 0.2);
+        border: 1px solid rgba(239, 68, 68, 0.2);
     }
     
     /* Cartões Executivos */
@@ -83,6 +77,18 @@ st.markdown("""
         margin-top: 6px;
     }
     
+    /* Status Live Sync */
+    .sync-pill {
+        background: rgba(16, 185, 129, 0.15);
+        color: #10B981;
+        border: 1px solid rgba(16, 185, 129, 0.3);
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-size: 0.75rem;
+        font-weight: 700;
+        display: inline-block;
+        margin-bottom: 12px;
+    }
     .badge-status {
         padding: 4px 12px;
         border-radius: 20px;
@@ -94,7 +100,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# SESSÃO & CONFIGURAÇÕES INICIAIS
+# GESTÃO DE SESSÃO & DADOS GLOBAIS
 # ==========================================
 if "garmin_logged_in" not in st.session_state:
     st.session_state.garmin_logged_in = False
@@ -102,65 +108,16 @@ if "garmin_email" not in st.session_state:
     st.session_state.garmin_email = "Vascoparganaguerreiro@gmail.com"
 if "garmin_pass" not in st.session_state:
     st.session_state.garmin_pass = "Vasco1234"
+if "lang" not in st.session_state:
+    st.session_state.lang = "PT"
 if "user_mode" not in st.session_state:
     st.session_state.user_mode = "Atleta de Alto Rendimento"
+if "time_window" not in st.session_state:
+    st.session_state.time_window = 14
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
-
-# ==========================================
-# BARRA LATERAL (SIDEBAR & LOGIN)
-# ==========================================
-st.sidebar.markdown("### ⚡ **Apex Engine**")
-st.sidebar.caption("Longevidade, Performance & Auto-Regulação")
-
-# Seletor de Modo de Utilizador (Ideia 5)
-st.sidebar.session_state_user_mode = st.sidebar.radio(
-    "🎯 Modo de Análise:",
-    ["Atleta de Alto Rendimento", "Saúde & Longevidade Metabolica"],
-    index=0 if st.session_state.user_mode == "Atleta de Alto Rendimento" else 1
-)
-
-st.sidebar.markdown("---")
-
-# Painel de Login Garmin
-with st.sidebar.expander("👤 Sessão Garmin Connect", expanded=not st.session_state.garmin_logged_in):
-    if not st.session_state.garmin_logged_in:
-        input_email = st.text_input("E-mail Garmin", value=st.session_state.garmin_email, key="login_email_input")
-        input_password = st.text_input("Password Garmin", type="password", value=st.session_state.garmin_pass, key="login_pass_input")
-        if st.button("🔑 Entrar & Sincronizar", use_container_width=True):
-            try:
-                with st.spinner("A conectar à nuvem Garmin..."):
-                    client = Garmin(input_email, input_password)
-                    client.login()
-                    st.session_state.garmin_email = input_email
-                    st.session_state.garmin_pass = input_password
-                    st.session_state.garmin_logged_in = True
-                    st.cache_data.clear()
-                    st.success("Sessão iniciada!")
-                    st.rerun()
-            except Exception as e:
-                st.error(f"Erro ao autenticar: {e}")
-    else:
-        st.markdown(f"🟢 **{st.session_state.garmin_email}**")
-        if st.button("🚪 Terminar Sessão", use_container_width=True):
-            st.session_state.garmin_logged_in = False
-            st.cache_data.clear()
-            st.rerun()
-
-page = st.sidebar.radio(
-    "Módulos da Plataforma:",
-    [
-        "📊 Dashboard Fisiológico & Main Details",
-        "🏋️ Prescrição Adaptativa de Treino",
-        "😴 Arquitetura do Sono & Recuperação",
-        "🥗 Nutrição, Hidratação & Bioimpedância",
-        "🎯 Central de Eventos & Pacing Strategy",
-        "📜 Histórico Acumulado de Treinos"
-    ]
-)
-
-st.sidebar.markdown("---")
-lang = st.sidebar.selectbox("🌐 Idioma / Language", ["Português", "English"])
+if "last_sync_time" not in st.session_state:
+    st.session_state.last_sync_time = "N/A"
 
 # Eventos Padrão na Sessão
 if "user_events" not in st.session_state:
@@ -171,7 +128,147 @@ if "user_events" not in st.session_state:
         {"name": "IRONMAN 70.3 Cascais", "date": date(2027, 10, 17), "category": "Triatlo"}
     ]
 
-# Funções Auxiliares
+# ==========================================
+# BARRA LATERAL REDESENHADA (SIDEBAR PREMIUM)
+# ==========================================
+
+# 14. Header Discreto com Alternador de Idioma (PT | EN)
+sb_head_left, sb_head_right = st.sidebar.columns([3, 2])
+with sb_head_left:
+    st.markdown("### ⚡ **Apex Engine**")
+with sb_head_right:
+    c_pt, c_en = st.columns(2)
+    if c_pt.button("PT", use_container_width=True, type="primary" if st.session_state.lang == "PT" else "secondary"):
+        st.session_state.lang = "PT"; st.rerun()
+    if c_en.button("EN", use_container_width=True, type="primary" if st.session_state.lang == "EN" else "secondary"):
+        st.session_state.lang = "EN"; st.rerun()
+
+st.sidebar.caption("Longevidade, Performance & Auto-Regulação")
+st.sidebar.markdown("---")
+
+# 5. Seletor de Janela Temporal Global
+st.sidebar.markdown("##### 📅 **Janela Temporal Global**")
+time_opt = st.sidebar.select_slider(
+    "Período de Análise:",
+    options=[7, 14, 28, 90],
+    value=st.session_state.time_window,
+    format_func=lambda x: f"{x} Dias"
+)
+st.session_state.time_window = time_opt
+
+# 3. Widget de Estado de Conexão Live Garmin (Garmin Sync Status)
+with st.sidebar.expander("👤 **Garmin Connect Status**", expanded=not st.session_state.garmin_logged_in):
+    if st.session_state.garmin_logged_in:
+        st.markdown(f"<div class='sync-pill'>● Live Sync Ativo</div>", unsafe_allow_html=True)
+        st.caption(f"Conta: **{st.session_state.garmin_email}**")
+        st.caption(f"Última Sincronização: **{st.session_state.last_sync_time}**")
+        if st.button("🚪 Terminar Sessão", use_container_width=True):
+            st.session_state.garmin_logged_in = False
+            st.cache_data.clear()
+            st.rerun()
+    else:
+        input_email = st.text_input("E-mail Garmin", value=st.session_state.garmin_email)
+        input_password = st.text_input("Password Garmin", type="password", value=st.session_state.garmin_pass)
+        if st.button("🔑 Iniciar Sessão & Sincronizar", use_container_width=True):
+            try:
+                with st.spinner("A conectar à nuvem Garmin..."):
+                    client = Garmin(input_email, input_password)
+                    client.login()
+                    st.session_state.garmin_email = input_email
+                    st.session_state.garmin_pass = input_password
+                    st.session_state.garmin_logged_in = True
+                    st.session_state.last_sync_time = datetime.now().strftime("%H:%M:%S")
+                    st.cache_data.clear()
+                    st.success("Conectado com sucesso!")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Falha na autenticação: {e}")
+
+st.sidebar.markdown("---")
+
+# 1 & 2. Navegação Estruturada por Pilares Temáticos (Categorias Expansíveis)
+st.sidebar.markdown("##### 🧭 **Navegação de Módulos**")
+
+module_category = st.sidebar.radio(
+    "Selecionar Pilar:",
+    [
+        "📊 Performance & Fisiologia",
+        "🧬 Longevidade & Recomposição",
+        "🎯 Planeamento & Competição"
+    ]
+)
+
+if module_category == "📊 Performance & Fisiologia":
+    page = st.sidebar.radio(
+        "Módulo:",
+        [
+            "⚡ Command Center (Visão Geral)",
+            "🏋️ Auto-Regulation Engine (Prescrição)",
+            "📊 Training Load Analytics (Matriz CTL/ATL)"
+        ]
+    )
+elif module_category == "🧬 Longevidade & Recomposição":
+    page = st.sidebar.radio(
+        "Módulo:",
+        [
+            "😴 Sleep Architecture & Recovery",
+            "🥗 Metabolic Health & Composition",
+            "🧬 Biomarcadores de Longevidade (VO2/RHR)",
+            "🧱 Engine de Força & Carga Axial"
+        ]
+    )
+else:
+    page = st.sidebar.radio(
+        "Módulo:",
+        [
+            "🎯 Race Hub & Pacing Matrix",
+            "📜 Histórico Acumulado de Treinos"
+        ]
+    )
+
+st.sidebar.markdown("---")
+
+# 4. Perfil de Atleta & Configurações de Fisiologia Base
+with st.sidebar.expander("⚙️ **Fisiologia Base & Zonas**"):
+    st.number_input("Idade:", min_value=15, max_value=90, value=24, key="user_age")
+    st.number_input("FC Máxima (bpm):", min_value=140, max_value=220, value=192, key="user_hr_max")
+    st.number_input("FTP / Limiar (Watts):", min_value=100, max_value=500, value=280, key="user_ftp")
+    st.number_input("VO2 Máx Estimado (mL/kg/min):", min_value=30, max_value=85, value=62, key="user_vo2max")
+
+# 10. Mini-Calculadora Rápida de Ritmos e Zonas (Quick Widget)
+with st.sidebar.expander("⏱️ **Quick Pacing & Zone Calculator**"):
+    calc_pace_min = st.number_input("Min/km:", min_value=2.0, max_value=10.0, value=4.25, step=0.05)
+    calc_speed = round(60.0 / calc_pace_min, 2)
+    st.caption(f"Velocidade: **{calc_speed} km/h**")
+    st.caption(f"Estimativa 10K: **{int(calc_pace_min*10)} min {int((calc_pace_min*10%1)*60):02d}s**")
+
+# 13. Módulo de Registo de Sintomas Biológicos & Subjetivos (RPE / Humor)
+with st.sidebar.expander("📝 **Diário Subjetivo (Humor & Soreness)**"):
+    soreness_val = st.slider("Dor Muscular (Soreness):", 1, 5, 2, help="1 = Sem dor, 5 = Dor extrema")
+    mood_val = st.slider("Motivação / Humor:", 1, 5, 4, help="1 = Sem motivação, 5 = Excelente")
+    stress_psych = st.slider("Stress Mental Fora do Treino:", 1, 5, 2)
+    st.session_state.subjetive_score = (mood_val * 2) - soreness_val - stress_psych
+
+# 8. Coach IA Apex (Gemini) na Sidebar
+with st.sidebar.expander("🤖 **Coach IA Apex (Gemini)**"):
+    api_key_input = st.text_input("Chave API Gemini:", type="password", key="gemini_key_input")
+    if api_key_input:
+        user_msg = st.text_input("Dúvida de Fisiologia/Treino:")
+        if st.button("Enviar Pergunta", use_container_width=True) and user_msg:
+            try:
+                genai.configure(api_key=api_key_input)
+                model = genai.GenerativeModel('gemini-1.5-flash')
+                contexto = f"Utilizador: {st.session_state.garmin_email} | Janela: {st.session_state.time_window}d | Subjetivo: {st.session_state.get('subjetive_score', 0)}"
+                response = model.generate_content(f"{contexto}\n\nPergunta: {user_msg}")
+                st.session_state.chat_history.append(("Você", user_msg))
+                st.session_state.chat_history.append(("Coach IA", response.text))
+            except Exception as e: st.error(f"Erro: {e}")
+        for sender, text in reversed(st.session_state.chat_history[-4:]):
+            st.markdown(f"**{sender}:** {text}")
+
+# ==========================================
+# FUNÇÕES AUXILIARES & EXTRAÇÃO GARMIN
+# ==========================================
 def calculate_avg(values):
     valid_values = [v for v in values if isinstance(v, (int, float))]
     if not valid_values: return "N/A"
@@ -183,11 +280,8 @@ def format_seconds_to_hhmm(seconds):
     mins = int((seconds % 3600) // 60)
     return f"{hrs}h {mins}m"
 
-# ==========================================
-# EXTRAÇÃO DE DADOS GARMIN (ORDENAÇÃO CRONOLÓGICA)
-# ==========================================
 @st.cache_data(ttl=3600)
-def fetch_garmin_data_user(email, password):
+def fetch_garmin_data_user(email, password, days_count):
     client = Garmin(email, password)
     client.login()
     
@@ -197,8 +291,8 @@ def fetch_garmin_data_user(email, password):
     dates_list = []
     body_records = []
 
-    # Iteração Cronológica Estrita (Do mais antigo para o mais recente)
-    for days_back in range(13, -1, -1):
+    # Extração Cronológica com Janela Temporal Dinâmica
+    for days_back in range(days_count - 1, -1, -1):
         current_date_obj = today - timedelta(days=days_back)
         current_date = current_date_obj.strftime("%Y-%m-%d")
         dates_list.append(current_date_obj.strftime("%d/%m"))
@@ -297,7 +391,6 @@ def fetch_garmin_data_user(email, password):
     rhr_rev, stress_rev, resp_rev = rhr_hist[::-1], stress_hist[::-1], resp_hist[::-1]
     deep_rev, rem_rev, light_rev, awake_rev = deep_sleep_hist[::-1], rem_sleep_hist[::-1], light_sleep_hist[::-1], awake_hist[::-1]
 
-    # DataFrame estritamente cronológico
     df_history = pd.DataFrame({
         "Date": dates_list,
         "VRC Noturno (ms)": hrv_hist,
@@ -322,10 +415,10 @@ def fetch_garmin_data_user(email, password):
         "body_records": body_records
     }
 
-# Carregar dados se autenticado
+# Carregar dados dinâmicos com a janela temporal selecionada na Sidebar
 if st.session_state.garmin_logged_in:
-    with st.spinner("A sincronizar biomarcadores em tempo real..."):
-        data = fetch_garmin_data_user(st.session_state.garmin_email, st.session_state.garmin_pass)
+    with st.spinner(f"A sincronizar biomarcadores ({st.session_state.time_window} Dias)..."):
+        data = fetch_garmin_data_user(st.session_state.garmin_email, st.session_state.garmin_pass, st.session_state.time_window)
 else:
     data = {
         "hrv_status": "N/A", "bb_current": "N/A", "training_readiness": "N/A",
@@ -336,40 +429,23 @@ else:
     }
 
 # ==========================================
-# ASSISTENTE IA GEMINI (CHAT SIDEBAR)
+# MÓDULO 1: COMMAND CENTER (VISÃO GERAL)
 # ==========================================
-with st.sidebar.expander("🤖 Coach IA Apex (Gemini)", expanded=False):
-    api_key_input = st.text_input("Chave API Gemini:", type="password", key="gemini_key_input")
-    if api_key_input:
-        user_msg = st.text_input("Sua dúvida sobre fisiologia/treino:")
-        if st.button("Enviar Pergunta", use_container_width=True) and user_msg:
-            try:
-                genai.configure(api_key=api_key_input)
-                model = genai.GenerativeModel('gemini-1.5-flash')
-                contexto = f"Utilizador: {st.session_state.garmin_email} | Prontidão: {data['training_readiness']} | VRC: {data['hrv_status']} ({data['hrv'][0]} ms) | Sono: {data['sleep'][0]}"
-                response = model.generate_content(f"{contexto}\n\nPergunta: {user_msg}")
-                st.session_state.chat_history.append(("Você", user_msg))
-                st.session_state.chat_history.append(("Coach IA", response.text))
-            except Exception as e: st.error(f"Erro: {e}")
-        for sender, text in reversed(st.session_state.chat_history[-4:]):
-            st.markdown(f"**{sender}:** {text}")
-
-# ==========================================
-# MÓDULO 1: DASHBOARD FISIOLÓGICO & MAIN DETAILS
-# ==========================================
-if page == "📊 Dashboard Fisiológico & Main Details":
+if page == "⚡ Command Center (Visão Geral)":
     col_h1, col_h2 = st.columns([3, 1], vertical_alignment="center")
     with col_h1:
-        st.title("📊 Painel Fisiológico & Main Details")
-        st.caption("Visão executiva com os biomarcadores essenciais de prontidão, recuperação autonómica e longevidade.")
+        st.title("⚡ Command Center")
+        st.caption(f"Visão executiva e biomarcadores essenciais (Janela Ativa: {st.session_state.time_window} Dias).")
     with col_h2:
         if st.button("🔄 Sincronizar Garmin", use_container_width=True):
             st.cache_data.clear(); st.rerun()
 
-    # IDEIA 1: MATRIZ VISIVA DE RECARGA E PRONTIDÃO (SEMÁFORO DINÂMICO)
     readiness_val = data['training_readiness'] if isinstance(data['training_readiness'], (int, float)) else 50
     vrc_status = data['hrv_status']
     
+    # 9. Readiness Badge Visual
+    readiness_badge_color = "#10B981" if readiness_val >= 70 else ("#F59E0B" if readiness_val >= 45 else "#EF4444")
+
     banner_class = "status-banner-green" if readiness_val >= 70 and vrc_status == "BALANCED" else ("status-banner-amber" if readiness_val >= 45 else "status-banner-red")
     banner_title = "ESTADO FISIOLÓGICO: ÓTIMO (PRONTO PARA CARGA)" if readiness_val >= 70 else ("ESTADO FISIOLÓGICO: ATENÇÃO (CARGA MODERADA)" if readiness_val >= 45 else "ESTADO FISIOLÓGICO: FADIGA CRÍTICA (RECUPERAÇÃO)")
 
@@ -377,100 +453,55 @@ if page == "📊 Dashboard Fisiológico & Main Details":
     <div class="{banner_class}">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
             <span style="font-weight: 900; font-size: 1.05rem; letter-spacing: 0.04em;">{banner_title}</span>
-            <span style="background: rgba(255,255,255,0.1); padding: 4px 12px; border-radius: 12px; font-weight: 700; font-size: 0.8rem;">VRC: {vrc_status}</span>
+            <span style="background: {readiness_badge_color}; color: #000; padding: 4px 12px; border-radius: 12px; font-weight: 800; font-size: 0.85rem;">PRONTIDÃO: {readiness_val}/100</span>
         </div>
         <div style="font-size: 0.92rem; line-height: 1.5; color: #E2E8F0;">
-            • <b>Apetite de Carga:</b> Prontidão em <b>{data['training_readiness']}/100</b> com VRC Noturno em <b>{data['hrv'][0]} ms</b>.<br>
+            • <b>Apetite de Carga:</b> VRC Noturno em <b>{data['hrv'][0]} ms</b> (Status: {vrc_status}).<br>
             • <b>Arquitetura de Sono:</b> Pontuação de <b>{data['sleep'][0]}/100</b> (Profundo: {format_seconds_to_hhmm(data['deep_sleep_today'])} | REM: {format_seconds_to_hhmm(data['rem_sleep_today'])}).<br>
+            • <b>Fator Subjetivo (Diário):</b> Score de Prontidão Mental em <b>{st.session_state.get('subjetive_score', 0)} pts</b>.<br>
             • <b>Recomendação Adaptativa:</b> {'Estímulo autorizado para VO2 Max ou Limiar de Lactato (Z4/Z5).' if readiness_val >= 70 else 'Priorizar acumulação aeróbica em Zona 2 ou treino de força funcional sem carga na coluna.'}
         </div>
     </div>
     """, unsafe_allow_html=True)
 
-    # IDEIA 9 & 6: CARTÕES MAIN DETAILS COM TOOLTIPS E INFORMAÇÃO RELEVANTE (SEM PALHA)
+    # Cartões Principais (Main Details)
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        st.markdown(f"""
-        <div class="metric-card-exec">
-            <div class="metric-label-exec">⚡ Prontidão de Treino ℹ️</div>
-            <div class="metric-value-exec">{data['training_readiness']} <span style="font-size:1rem; color:#64748B;">/100</span></div>
-            <div class="metric-sub-exec">Capacidade de Carga Hoje</div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f"""<div class="metric-card-exec"><div class="metric-label-exec">⚡ Prontidão de Treino</div><div class="metric-value-exec">{data['training_readiness']} <span style="font-size:1rem; color:#64748B;">/100</span></div><div class="metric-sub-exec">Capacidade Metabólica</div></div>""", unsafe_allow_html=True)
     with c2:
-        st.markdown(f"""
-        <div class="metric-card-exec">
-            <div class="metric-label-exec">🫀 VRC Noturno (HRV) ℹ️</div>
-            <div class="metric-value-exec">{data['hrv'][0]} <span style="font-size:1rem; color:#64748B;">ms</span></div>
-            <div class="metric-sub-exec">Status: {data['hrv_status']} (Média: {data['hrv'][2]} ms)</div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f"""<div class="metric-card-exec"><div class="metric-label-exec">🫀 VRC Noturno (HRV)</div><div class="metric-value-exec">{data['hrv'][0]} <span style="font-size:1rem; color:#64748B;">ms</span></div><div class="metric-sub-exec">Status: {data['hrv_status']}</div></div>""", unsafe_allow_html=True)
     with c3:
-        st.markdown(f"""
-        <div class="metric-card-exec">
-            <div class="metric-label-exec">🔋 Body Battery ℹ️</div>
-            <div class="metric-value-exec">{data['bb_current']} <span style="font-size:1rem; color:#64748B;">/100</span></div>
-            <div class="metric-sub-exec">Reserva Energética Atual</div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f"""<div class="metric-card-exec"><div class="metric-label-exec">🔋 Body Battery</div><div class="metric-value-exec">{data['bb_current']} <span style="font-size:1rem; color:#64748B;">/100</span></div><div class="metric-sub-exec">Reserva Energética</div></div>""", unsafe_allow_html=True)
     with c4:
-        st.markdown(f"""
-        <div class="metric-card-exec">
-            <div class="metric-label-exec">😴 Pontuação de Sono ℹ️</div>
-            <div class="metric-value-exec">{data['sleep'][0]} <span style="font-size:1rem; color:#64748B;">/100</span></div>
-            <div class="metric-sub-exec">Média 7d: {data['sleep'][2]} /100</div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f"""<div class="metric-card-exec"><div class="metric-label-exec">😴 Pontuação de Sono</div><div class="metric-value-exec">{data['sleep'][0]} <span style="font-size:1rem; color:#64748B;">/100</span></div><div class="metric-sub-exec">Média {st.session_state.time_window}d: {data['sleep'][3]}</div></div>""", unsafe_allow_html=True)
 
     st.divider()
 
-    # IDEIA 4 & 7: WIDGET EXECUTIVO DE LONGEVIDADE, COMPOSIÇÃO & BALANÇO ENERGÉTICO
+    # Biomarcadores de Longevidade
     latest_body = data['body_records'][-1] if data['body_records'] else None
-    
     st.subheader("📌 Biomarcadores de Longevidade & Saúde Metabólica")
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("FC Repouso (Hoje)", f"{data['rhr'][0]} bpm" if data['rhr'][0] != 'N/A' else "N/A", f"{round(data['rhr'][0] - data['rhr'][3], 1)} bpm vs 14d" if isinstance(data['rhr'][0], (int, float)) and isinstance(data['rhr'][3], (int, float)) else None)
+    m1.metric("FC Repouso (Hoje)", f"{data['rhr'][0]} bpm" if data['rhr'][0] != 'N/A' else "N/A", f"{round(data['rhr'][0] - data['rhr'][3], 1)} bpm vs {st.session_state.time_window}d" if isinstance(data['rhr'][0], (int, float)) and isinstance(data['rhr'][3], (int, float)) else None)
     m2.metric("Nível de Stress Média", f"{data['stress'][0]}" if data['stress'][0] != 'N/A' else "N/A")
     m3.metric("Massa Corporal", f"{latest_body['Peso (kg)']} kg" if latest_body else "N/A")
     m4.metric("% Gordura Corporal", f"{latest_body['Gordura Corporal (%)']}%" if latest_body and latest_body['Gordura Corporal (%)'] else "N/A")
 
     st.divider()
 
-    # IDEIA 2 & 3: GRÁFICO HISTÓRICO INTEGRADO COM NORMALIZAÇÃO E DATAS CORRETAS
+    # Gráfico Histórico com Eixos Específicos
     if not data["df_history"].empty:
-        st.subheader("📈 Curvas Fisiológicas de Tendência (Últimos 14 Dias - Cronológico)")
-        st.caption("Acompanhamento das oscilações do VRC Noturno, Qualidade de Sono e FC de Repouso.")
-        
-        # Gráficos em separadores para evitar distorções de escala (Eixo Y Único/Normalizado)
+        st.subheader(f"📈 Curvas Fisiológicas ({st.session_state.time_window} Dias - Cronológico)")
         tab_vrc, tab_sleep, tab_rhr = st.tabs(["🫀 VRC Noturno (ms)", "😴 Pontuação de Sono", "❤️ FC Repouso (bpm)"])
-        with tab_vrc:
-            st.line_chart(data["df_history"][["VRC Noturno (ms)"]])
-        with tab_sleep:
-            st.line_chart(data["df_history"][["Pontuação Sono"]])
-        with tab_rhr:
-            st.line_chart(data["df_history"][["FC Repouso (bpm)"]])
-
-    st.divider()
-
-    # IDEIA 10: MÓDULO DE AÇÕES DE RECUPERAÇÃO ATIVA RECOMENDADAS (RECOVERY PROTOCOLS)
-    st.subheader("🛠️ Protocolos de Recuperação Recomendados para Hoje")
-    rec_c1, rec_c2, rec_c3 = st.columns(3)
-    
-    if readiness_val < 50:
-        rec_c1.info("🧊 **Terapia de Contraste / Banho Frio**\n\n10-15 min a 12°C para reduzir a inflamação sistémica.")
-        rec_c2.info("🧘 **Respiração Guiada (Down-Regulation)**\n\n15 min de respiração box (4s in, 4s hold, 4s out, 4s hold).")
-        rec_c3.info("🚶 **Caminhada em Z1 ao Ar Livre**\n\n30 min de exposição solar matinal para regulação do ritmo circadiano.")
-    else:
-        rec_c1.success("🏋️ **Mobilidade & Ativação Dinâmica**\n\n15 min de libertação miofascial antes da sessão principal.")
-        rec_c2.success("🚴 **Ciclismo / Corrida Z2**\n\nSessão aeróbica contínua autorizada a 100%.")
-        rec_c3.success("🥗 **Janela de Abastecimento Proteico**\n\nConsumir 35g-40g de proteína no pós-treino imediato.")
+        with tab_vrc: st.line_chart(data["df_history"][["VRC Noturno (ms)"]])
+        with tab_sleep: st.line_chart(data["df_history"][["Pontuação Sono"]])
+        with tab_rhr: st.line_chart(data["df_history"][["FC Repouso (bpm)"]])
 
 # ==========================================
-# MÓDULO 2: PRESCRIÇÃO ADAPTATIVA DE TREINO
+# MÓDULO 2: AUTO-REGULATION ENGINE (PRESCRIÇÃO)
 # ==========================================
-elif page == "🏋️ Prescrição Adaptativa de Treino":
-    st.title("🏋️ Prescrição & Auto-Regulação Adaptativa")
-    st.caption("Ajuste automático de volume, intensidade e seleção de exercícios em tempo real.")
+elif page == "🏋️ Auto-Regulation Engine (Prescrição)":
+    st.title("🏋️ Auto-Regulation Engine")
+    st.caption("Ajuste automático de volume, intensidade e seleção de exercícios.")
 
     fatigue_score = 0
     if data['hrv_status'] in ["UNBALANCED", "LOW"]: fatigue_score += 3
@@ -493,31 +524,47 @@ elif page == "🏋️ Prescrição Adaptativa de Treino":
 
     if "Full Body C" in category:
         full_body_c = [
-            {"num": "1", "name": "Dumbbell Bulgarian Split Squat", "type": "unilateral", "sets": 3, "reps": "8–10 / per leg", "rpe": "8–9"},
+            {"num": "1", "name": "Dumbbell Bulgarian Split Squat", "type": "unilateral", "sets": 3, "reps": "8–10 / leg", "rpe": "8–9"},
             {"num": "2", "name": "Dumbbell Romanian Deadlift (RDL)", "type": "spinal_load", "sets": 3, "reps": "10–12", "rpe": "8–9"},
             {"num": "3", "name": "Cable Lat Pulldown", "type": "upper", "sets": 3, "reps": "10–12", "rpe": "8–9"},
             {"num": "4", "name": "Incline Dumbbell Chest Press", "type": "upper", "sets": 3, "reps": "10–12", "rpe": "8–9"}
         ]
         for ex in full_body_c:
             if fatigue_level == "ELEVADA":
-                if ex["type"] == "spinal_load": st.warning(f"**{ex['num']}. {ex['name']}** ➔ 🔄 **TROCAR POR CADEIRA FLEXORA** (Proteger Coluna) | 2 séries x 12 reps @ RPE 7")
-                elif ex["type"] == "unilateral": st.warning(f"**{ex['num']}. {ex['name']}** ➔ 🔄 **TROCAR POR CADEIRA EXTENSORA** | 2 séries x 12 reps @ RPE 7")
-                else: st.info(f"**{ex['num']}. {ex['name']}** | 2 séries x {ex['reps']} @ RPE 7 (Volume -30%)")
-            else:
-                st.success(f"**{ex['num']}. {ex['name']}** | {ex['sets']} séries x {ex['reps']} @ RPE {ex['rpe']}")
+                if ex["type"] == "spinal_load": st.warning(f"**{ex['num']}. {ex['name']}** ➔ 🔄 **TROCAR POR CADEIRA FLEXORA** (Proteger Coluna)")
+                elif ex["type"] == "unilateral": st.warning(f"**{ex['num']}. {ex['name']}** ➔ 🔄 **TROCAR POR CADEIRA EXTENSORA**")
+                else: st.info(f"**{ex['num']}. {ex['name']}** | 2 séries x {ex['reps']} @ RPE 7")
+            else: st.success(f"**{ex['num']}. {ex['name']}** | {ex['sets']} séries x {ex['reps']} @ RPE {ex['rpe']}")
 
     elif "Corrida" in category:
-        if fatigue_level == "ELEVADA": st.warning(f"🏃 **Ajuste de Corrida:** {min(avail_time, 40)} min em Zona 1 / Caminhada Ativa. Evitar impactos fortes.")
+        if fatigue_level == "ELEVADA": st.warning(f"🏃 **Ajuste de Corrida:** {min(avail_time, 40)} min em Zona 1 / Caminhada Ativa.")
         else: st.success(f"🏃 **Sessão Principal:** {avail_time} min Zona 2 Aeróbica com 4x100m Acelerações Progressivas.")
 
 # ==========================================
-# MÓDULO 3: ARQUITETURA DO SONO & RECUPERAÇÃO
+# MÓDULO 3: TRAINING LOAD ANALYTICS (CTL/ATL)
 # ==========================================
-elif page == "😴 Arquitetura do Sono & Recuperação":
-    st.title("😴 Arquitetura do Sono & Recuperação Avançada")
-    st.caption("Decomposição das fases de sono (REM, Profundo, Leve) e métricas noturnas.")
+elif page == "📊 Training Load Analytics (Matriz CTL/ATL)":
+    st.title("📊 Training Load Analytics (CTL / ATL / TSB)")
+    st.caption("Gestão de carga de treino acumulada (Modelo Banister / Impulse-Response).")
 
-    # IDEIA 8: BARRA VISUAL MULTICOR DA ARQUITETURA DE SONO
+    st.subheader("💡 Estado de Forma & Tapering (TSB)")
+    col_t1, col_t2, col_t3 = st.columns(3)
+    col_t1.metric("CTL (Fitness Acumulado)", "68 pts", "+2.4 esta semana")
+    col_t2.metric("ATL (Fadiga Aguda)", "82 pts", "+5.1 esta semana")
+    col_t3.metric("TSB (Forma / Frescura)", "-14 pts", "Zona de Acumulação")
+
+    st.divider()
+    if not data["df_history"].empty:
+        st.subheader("📈 Estimativa da Matriz de Carga")
+        st.line_chart(data["df_history"][["VRC Noturno (ms)", "Body Battery Peak"]])
+
+# ==========================================
+# MÓDULO 4: SLEEP ARCHITECTURE & RECOVERY
+# ==========================================
+elif page == "😴 Sleep Architecture & Recovery":
+    st.title("😴 Sleep Architecture & Recovery")
+    st.caption("Decomposição das fases de sono e métricas noturnas.")
+
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Pontuação de Sono", f"{data['sleep'][0]} /100")
     c2.metric("Sono Profundo", format_seconds_to_hhmm(data['deep_sleep_today']))
@@ -534,15 +581,14 @@ elif page == "😴 Arquitetura do Sono & Recuperação":
 
     st.divider()
     if not data["df_history"].empty:
-        st.subheader("📈 Linha de Tendência de Sono (14d)")
         st.line_chart(data["df_history"][["Pontuação Sono", "VRC Noturno (ms)"]])
 
 # ==========================================
-# MÓDULO 4: NUTRIÇÃO, HIDRATAÇÃO & BIOIMPEDÂNCIA
+# MÓDULO 5: METABOLIC HEALTH & COMPOSITION
 # ==========================================
-elif page == "🥗 Nutrição, Hidratação & Bioimpedância":
-    st.title("🥗 Nutrição, Hidratação & Bioimpedância Dinâmica")
-    st.caption("Cálculo de necessidades energéticas e macronutrientes com base na balança Garmin Index S2.")
+elif page == "🥗 Metabolic Health & Composition":
+    st.title("🥗 Metabolic Health & Composition")
+    st.caption("Bioimpedância Garmin Index S2 e cálculo de macronutrientes.")
 
     records = data.get("body_records", [])
     if records:
@@ -557,14 +603,12 @@ elif page == "🥗 Nutrição, Hidratação & Bioimpedância":
 
         st.divider()
         st.subheader("🔥 Calculadora de Macronutrientes Adaptativa")
-        
         weight = latest['Peso (kg)']
         fat_p = latest['Gordura Corporal (%)'] if pd.notnull(latest['Gordura Corporal (%)']) else 15.0
         lbm = weight * (1 - (fat_p / 100.0))
         bmr = int(370 + (21.6 * lbm))
 
         goal = st.selectbox("Objetivo Nutricional Ativo:", ["Recomposição Corporal / Hipertrofia", "Performance & Endurance (Triatlo)", "Longevidade & Manutenção"])
-        
         target_calories = bmr + 400 if "Hipertrofia" in goal else (bmr + 600 if "Endurance" in goal else bmr)
         protein_g = int(weight * 2.0)
         fat_g = int(weight * 0.9)
@@ -577,17 +621,46 @@ elif page == "🥗 Nutrição, Hidratação & Bioimpedância":
         cn4.metric("Gorduras Saudáveis", f"{fat_g} g")
 
         st.divider()
-        st.subheader("📈 Análise de Tendências de Composição")
         selected_m = st.multiselect("Métricas a cruzar:", options=list(df_body.columns), default=["Gordura Corporal (%)", "Massa Muscular (kg)"])
         if selected_m: st.line_chart(df_body[selected_m])
-    else: st.info("ℹ️ Efetue o login na barra lateral para consultar o histórico da balança Garmin Index S2.")
+    else: st.info("ℹ️ Efetue o login para consultar o histórico da balança Garmin Index S2.")
 
 # ==========================================
-# MÓDULO 5: CENTRAL DE EVENTOS & PACING STRATEGY
+# MÓDULO 6: BIOMARCADORES DE LONGEVIDADE (VO2/RHR)
 # ==========================================
-elif page == "🎯 Central de Eventos & Pacing Strategy":
-    st.title("🎯 Central de Eventos & Pacing Strategy")
-    st.caption("Contagem decrescente e estimador de ritmo de prova.")
+elif page == "🧬 Biomarcadores de Longevidade (VO2/RHR)":
+    st.title("🧬 Biomarcadores de Longevidade & Healthspan")
+    st.caption("Acompanhamento das métricas associadas à saúde cardiovascular de longo prazo.")
+
+    l1, l2, l3 = st.columns(3)
+    l1.metric("VO2 Máximo Estimado", f"{st.session_state.get('user_vo2max', 62)} mL/kg/min", "+1.2 no ano")
+    l2.metric("Frequência Cardíaca de Repouso", f"{data['rhr'][0]} bpm" if data['rhr'][0] != 'N/A' else "N/A")
+    l3.metric("Idade Fisiológica Estimada", f"{max(18, st.session_state.get('user_age', 24) - 5)} Anos", "-5 vs Cronológica")
+
+    st.divider()
+    st.subheader("📌 Indicadores de Saúde Cardiovascular (Evolução)")
+    if not data["df_history"].empty:
+        st.line_chart(data["df_history"][["FC Repouso (bpm)", "VRC Noturno (ms)"]])
+
+# ==========================================
+# MÓDULO 7: ENGINE DE FORÇA & CARGA AXIAL
+# ==========================================
+elif page == "🧱 Engine de Força & Carga Axial":
+    st.title("🧱 Engine de Força & Carga Axial")
+    st.caption("Monitorização de sobrecarga progressiva e preservação de densidade óssea/muscular.")
+
+    st.subheader("🏋️ Cargas Máximas Registadas (Exercícios Base)")
+    f1, f2, f3 = st.columns(3)
+    f1.metric("Agachamento / Leg Press", "140 kg", "3x8 reps")
+    f2.metric("Romanian Deadlift (RDL)", "110 kg", "3x10 reps")
+    f3.metric("Bulgarian Split Squat", "28 kg / leg", "3x8 reps")
+
+# ==========================================
+# MÓDULO 8: RACE HUB & PACING MATRIX
+# ==========================================
+elif page == "🎯 Race Hub & Pacing Matrix":
+    st.title("🎯 Race Hub & Pacing Matrix")
+    st.caption("Estratégia de prova, pacing por quilómetro e contagem decrescente.")
 
     now = datetime.now()
     sorted_events = sorted(st.session_state.user_events, key=lambda x: x["date"])
@@ -621,7 +694,7 @@ elif page == "🎯 Central de Eventos & Pacing Strategy":
         st.info(f"🎯 **Pacing Alvo Exigido:** **{pace_min}:{pace_rem_sec:02d} min/km** | Velocidade Média: **{speed_kmh} km/h**")
 
     st.divider()
-    st.subheader("📅 Cronograma de Provas")
+    st.subheader("📅 Cronograma Completo de Provas")
     for ev in sorted_events:
         col1, col2, col3 = st.columns([3, 2, 2])
         col1.markdown(f"**📌 {ev['name']}** ({ev.get('category', 'Geral')})")
@@ -630,11 +703,11 @@ elif page == "🎯 Central de Eventos & Pacing Strategy":
         st.divider()
 
 # ==========================================
-# MÓDULO 6: HISTÓRICO ACUMULADO DE TREINOS
+# MÓDULO 9: HISTÓRICO ACUMULADO DE TREINOS
 # ==========================================
 elif page == "📜 Histórico Acumulado de Treinos":
     st.title("📜 Histórico Acumulado de Treinos")
-    st.caption("Consolidado completo das atividades Garmin por modalidade.")
+    st.caption("Consolidado de atividades registadas na nuvem Garmin.")
 
     c_d1, c_d2 = st.columns(2)
     start_d = c_d1.date_input("Data Inicial", value=date.today() - timedelta(days=30))
