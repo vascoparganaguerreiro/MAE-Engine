@@ -106,13 +106,12 @@ t = TEXTS[lang]
 # ==========================================
 # PÁGINA 1: DASHBOARD FISIOLÓGICO DA GARMIN
 # ==========================================
-if page == "📊 Dashboard Fisiológico":
-    pass  # Continua a executar todo o Dashboard Fisiológico abaixo
-
+if page != "📊 Dashboard Fisiológico":
+    pass
 # ==========================================
 # PÁGINA 2: GOALS & EVENTOS DEDICADA
 # ==========================================
-elif page == "🎯 Goals & Eventos":
+if page == "🎯 Goals & Eventos":
     st.title("🎯 Central de Eventos & Objetivos")
     st.markdown("Gestão cronológica de provas alvo com contagem decrescente em tempo real.")
     
