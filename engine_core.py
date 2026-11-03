@@ -1,7 +1,5 @@
 """
-Apex Engine Core (v3.0 - Comprehensive Clinical & Sports Science Engine)
-Contains deterministic models, Z-score readiness, Banister CTL/ATL/TSB, ACWR,
-Foster Monotony/Strain, Autoregulated Strength Engine, and Healthspan Analytics.
+Apex Engine Core (v3.1 - Clinical & Sports Science Engine with Advanced Nutrition)
 """
 
 import math
@@ -12,53 +10,20 @@ from typing import Dict, Any, List, Optional, Tuple
 
 
 # ==========================================
-# TRANSLATION DICTIONARY (i18n PT-PT / EN)
+# TRANSLATION DICTIONARY
 # ==========================================
 TRANSLATIONS = {
     "PT": {
         "today_decision_green": "Dia de Treino Normal: Capacidade Total",
         "today_decision_amber": "Dia Moderado: Reduzir Carga Axial e Intensidade",
         "today_decision_red": "Dia de Recuperação Ativa: Preservar o Sistema Nervoso",
-        "today_reason_hrv_low": "VRC Noturno abaixo da tua linha de base de 60 dias",
-        "today_reason_hrv_ok": "VRC Noturno dentro da tua faixa normal",
-        "today_reason_sleep_low": "Défice de sono acumulado detetado",
-        "today_reason_sleep_ok": "Duração e arquitetura de sono adequadas",
-        "today_reason_rhr_high": "FC de Repouso elevada (sinal de stress/fadiga)",
-        "today_reason_rhr_ok": "FC de Repouso estável",
-        "action_start_zone2": "Zona 2 Leve (30 min)",
-        "action_start_strength": "Força Adaptativa",
-        "action_mobility": "Mobilidade (20 min)",
-        "action_log_diary": "Registar Diário",
-        "calibrating": "Em Calibração (Dia {day}/28)",
-        "provisional": "Linha de Base Provisória (28-59 dias)",
-        "personalized": "Linha de Base Sólida (60 dias)",
-        "confidence_high": "Confiança Elevada dos Dados",
-        "confidence_med": "Confiança Média (Dados Parciais)",
-        "confidence_low": "Confiança Baixa (Sensor / Falha)",
     },
     "EN": {
         "today_decision_green": "Full Training Day: High Readiness",
         "today_decision_amber": "Moderate Day: Lower Axial Load & Intensity",
         "today_decision_red": "Recovery Day: Protect Nervous System",
-        "today_reason_hrv_low": "Overnight HRV below your 60-day baseline",
-        "today_reason_hrv_ok": "Overnight HRV within normal range",
-        "today_reason_sleep_low": "Accumulated sleep deficit detected",
-        "today_reason_sleep_ok": "Sleep duration and architecture adequate",
-        "today_reason_rhr_high": "Elevated Resting HR (stress/fatigue signal)",
-        "today_reason_rhr_ok": "Resting HR stable",
-        "action_start_zone2": "Light Zone 2 (30 min)",
-        "action_start_strength": "Adaptive Strength",
-        "action_mobility": "Mobility (20 min)",
-        "action_log_diary": "Log Diary",
-        "calibrating": "Calibrating (Day {day}/28)",
-        "provisional": "Provisional Baseline (28-59 days)",
-        "personalized": "Solid 60-Day Baseline",
-        "confidence_high": "High Data Confidence",
-        "confidence_med": "Medium Data Confidence",
-        "confidence_low": "Low Data Confidence",
     }
 }
-
 
 def t(key: str, lang: str = "PT", **kwargs) -> str:
     text = TRANSLATIONS.get(lang, TRANSLATIONS["PT"]).get(key, key)
@@ -66,7 +31,7 @@ def t(key: str, lang: str = "PT", **kwargs) -> str:
 
 
 # ==========================================
-# PILLAR 1: TODAY / DECISÃO DIÁRIA ENGINE
+# DATA QUALITY & CALIBRATION
 # ==========================================
 class DataQualityEngine:
     @staticmethod
@@ -91,12 +56,6 @@ class DataQualityEngine:
                 confidence -= 0.2
                 reasons.append("Sono REM < 5%")
 
-        if sleep_seconds and awake_seconds:
-            awake_pct = (awake_seconds / sleep_seconds) * 100
-            if awake_pct > 20.0:
-                confidence -= 0.2
-                reasons.append("Tempo acordado elevado (> 20%)")
-
         return max(0.1, round(confidence, 2)), reasons
 
     @staticmethod
@@ -109,7 +68,6 @@ class DataQualityEngine:
 
 
 def get_hrv_context(current_rmssd: float, baseline_rmssd: float) -> Dict[str, str]:
-    """Feature 1: Dynamic Physiological Contextualization."""
     if baseline_rmssd <= 0:
         return {"status": "Sem Dados", "explanation": "A recolher dados para definir linha de base."}
     
@@ -118,25 +76,23 @@ def get_hrv_context(current_rmssd: float, baseline_rmssd: float) -> Dict[str, st
         return {
             "status": "Sympathetic Stress Overdrive",
             "explanation": f"O teu VRC noturno caiu {abs(delta_pct):.1f}% abaixo da média de 60 dias. "
-                           "Reflete supressão parassimpática expressiva por carga aguda elevada, má continuidade de sono "
-                           "ou stress sistémico. Esforços de alta intensidade hoje transportam risco acrescido de sobretreino."
+                           "Reflete supressão parassimpática expressiva. Evitar treinos de alta intensidade hoje."
         }
     elif delta_pct < -10:
         return {
             "status": "Fadiga Autonómica Moderada",
             "explanation": f"O teu VRC noturno está {abs(delta_pct):.1f}% abaixo da linha de base. "
-                           "Fadiga acumulada ligeira. Recomenda-se treino aeróbico em Z1/Z2 ou musculação com carga axial reduzida."
+                           "Recomenda-se treino aeróbico em Z1/Z2 ou mobilidade."
         }
     elif delta_pct > 15:
         return {
-            "status": "Hiper-Adaptação / Recuperação Elevada",
-            "explanation": f"VRC noturno {delta_pct:.1f}% acima da média. "
-                           "Sistema nervoso em homeostase ideal. Capacidade total para sessões de alta intensidade ou teste de carga."
+            "status": "Hiper-Adaptação / Prontidão Alta",
+            "explanation": f"VRC noturno {delta_pct:.1f}% acima da média. Sistema em excelente recuperação."
         }
     else:
         return {
             "status": "Homeostase Fisiológica",
-            "explanation": "VRC dentro da faixa normal de flutuação (+/- 10%). Seguir plano de treino habitual."
+            "explanation": "VRC dentro da faixa normal. Seguir plano de treino habitual."
         }
 
 
@@ -178,13 +134,10 @@ def compute_zscore_readiness(
         "readiness_score": norm_score,
         "z_sum": round(raw_z_sum, 2),
         "waterfall": waterfall,
-        "hrv_z": round(hrv_z, 2),
-        "rhr_z": round(rhr_z, 2)
     }
 
 
 def compute_sleep_debt_7d(sleep_hours_series: List[float], target_sleep_hours: float = 8.0) -> float:
-    """Feature 4: Circadian Sleep Debt Accumulator."""
     if not sleep_hours_series:
         return 0.0
     last_7 = sleep_hours_series[-7:]
@@ -192,14 +145,15 @@ def compute_sleep_debt_7d(sleep_hours_series: List[float], target_sleep_hours: f
     return round(debt, 1)
 
 
-# ==========================================
-# PILLAR 2: VRC & TREND ENGINE
-# ==========================================
 def calculate_trend_slope(series: List[float]) -> Dict[str, Any]:
-    """Feature 16: Trend Slope Indicator."""
-    if len(series) < 3:
+    if not series or len(series) < 3:
+        return {"slope": 0.0, "text": "Dados insuficientes para tendência"}
+    
+    clean_series = [x for x in series if x is not None and not np.isnan(x)]
+    if len(clean_series) < 3:
         return {"slope": 0.0, "text": "Dados insuficientes"}
-    y = np.array(series)
+        
+    y = np.array(clean_series)
     x = np.arange(len(y))
     slope, _ = np.polyfit(x, y, 1)
     
@@ -221,25 +175,23 @@ def evaluate_hrv_rhr_matrix(hrv_val: float, hrv_mean: float, hrv_sd: float,
     rhr_z = zscore(rhr_val, rhr_mean, rhr_sd)
 
     if abs(hrv_z) <= 1.0 and abs(rhr_z) <= 1.0:
-        return {"quadrant": "Normal / Equilibrado", "status": "Homeostase", "action": "Treino normal dentro do plano previsto."}
+        return {"quadrant": "Normal", "status": "Homeostase", "action": "Treino normal."}
     elif hrv_z < -1.0 and rhr_z > 1.0:
-        return {"quadrant": "Fadiga Aguda / Stress", "status": "Sympathetic Stress", "action": "Sinal de sobrecarga ou início de infeção. Reduzir intensidade."}
+        return {"quadrant": "Fadiga Aguda", "status": "Sympathetic Stress", "action": "Reduzir intensidade."}
     elif hrv_z > 1.0 and rhr_z < -1.0:
-        return {"quadrant": "Prontidão Elevada", "status": "Parasympathetic High", "action": "Excelente capacidade de adaptação. Estímulo de qualidade autorizado."}
-    elif hrv_z > 1.5 and rhr_z > 1.0:
-        return {"quadrant": "Atípico / Desregulação", "status": "Autonomic Disruption", "action": "Sinal atípico (exaustão central). Priorizar descanso e hidratação."}
+        return {"quadrant": "Prontidão Alta", "status": "Parasympathetic High", "action": "Excelente capacidade."}
     else:
-        return {"quadrant": "Desvio Ligeiro", "status": "Moderado", "action": "Ajustar volume de treino com prudência."}
+        return {"quadrant": "Desvio Ligeiro", "status": "Moderado", "action": "Ajustar volume."}
 
 
 # ==========================================
-# PILLAR 3: FORÇA & CARGA AXIAL ENGINE
+# STRENGTH & AXIAL LOAD DATABASE
 # ==========================================
 EXERCISE_DATABASE = [
     {
         "id": "sq_back", "name": "Agachamento com Barra (Back Squat)", "pattern": "Squat",
         "spinal_load": 5, "equip": "Barbell", "alt_low_axial": "leg_press", "base_pct_1rm": 0.75,
-        "active_muscles": "Quadríceps, Glúteo Máximo", "joint_protected": "Coluna Lombar (evitar axial)"
+        "active_muscles": "Quadríceps, Glúteo Máximo", "joint_protected": "Coluna Lombar"
     },
     {
         "id": "leg_press", "name": "Prensa de Pernas (Leg Press)", "pattern": "Squat",
@@ -255,22 +207,11 @@ EXERCISE_DATABASE = [
         "id": "leg_curl", "name": "Flexão de Pernas Deitado (Leg Curl)", "pattern": "Hinge",
         "spinal_load": 1, "equip": "Machine", "alt_low_axial": None, "base_pct_1rm": 0.65,
         "active_muscles": "Isquiotibiais", "joint_protected": "Lombar Isenta"
-    },
-    {
-        "id": "split_squat", "name": "Agachamento Búlgaro (Split Squat)", "pattern": "Unilateral",
-        "spinal_load": 3, "equip": "Dumbbells", "alt_low_axial": "leg_ext", "base_pct_1rm": 0.65,
-        "active_muscles": "Quadríceps, Estabilizadores", "joint_protected": "Papeis Unilaterais"
-    },
-    {
-        "id": "leg_ext", "name": "Extensão de Pernas (Leg Extension)", "pattern": "Isolation",
-        "spinal_load": 1, "equip": "Machine", "alt_low_axial": None, "base_pct_1rm": 0.60,
-        "active_muscles": "Quadríceps Isolado", "joint_protected": "Joelho (RPE Moderado)"
     }
 ]
 
 
 def calculate_spinal_load_score(workout_exercises: List[Dict[str, Any]]) -> float:
-    """Feature 21: Automated Axial Load Scoring Matrix."""
     if not workout_exercises:
         return 0.0
     scores = [ex.get("spinal_load", 1) for ex in workout_exercises]
@@ -282,26 +223,9 @@ def autoregulate_strength_workout(readiness_score: int, user_1rm_dict: Optional[
         user_1rm_dict = {"sq_back": 140.0, "rdl_bb": 120.0, "leg_press": 200.0, "leg_curl": 70.0}
 
     workout = []
-    
-    if readiness_score >= 70:
-        intensity_target = "RPE 8-9 (1-2 RIR)"
-        set_multiplier = 1.0
-        reduction_note = "Capacidade total: Exercícios base com carga axial autorizados."
-        high_fatigue = False
-    elif readiness_score >= 45:
-        intensity_target = "RPE 7-8 (2-3 RIR)"
-        set_multiplier = 0.8
-        reduction_note = "Fadiga moderada: Manter volume mas limitar RPE."
-        high_fatigue = False
-    else:
-        intensity_target = "RPE 6-7 (3-4 RIR)"
-        set_multiplier = 0.6
-        reduction_note = "Sessão Leve Opcional: Exercícios com carga na coluna substituídos por máquinas."
-        high_fatigue = True
+    high_fatigue = readiness_score < 45
 
-    base_indices = [0, 2]
-
-    for idx in base_indices:
+    for idx in [0, 2]:
         ex = EXERCISE_DATABASE[idx]
         chosen_ex = ex
         substituted = False
@@ -314,11 +238,8 @@ def autoregulate_strength_workout(readiness_score: int, user_1rm_dict: Optional[
                 if alt_ex:
                     chosen_ex = alt_ex
                     substituted = True
-                    reason = f"Substituído {ex['name']} (Carga axial {ex['spinal_load']}/5) por {alt_ex['name']} para proteger a coluna."
+                    reason = f"Substituído {ex['name']} por {alt_ex['name']} para proteger a coluna."
 
-        base_sets = 3
-        final_sets = max(2, int(round(base_sets * set_multiplier)))
-        
         est_1rm = user_1rm_dict.get(chosen_ex["id"], 100.0)
         recommended_weight = round(est_1rm * chosen_ex["base_pct_1rm"], 1)
 
@@ -326,12 +247,11 @@ def autoregulate_strength_workout(readiness_score: int, user_1rm_dict: Optional[
             "id": chosen_ex["id"],
             "exercise": chosen_ex["name"],
             "pattern": chosen_ex["pattern"],
-            "sets": final_sets,
+            "sets": 2 if high_fatigue else 3,
             "reps": "8–10",
-            "intensity": intensity_target,
+            "intensity": "RPE 6-7" if high_fatigue else "RPE 8",
             "target_kg": recommended_weight,
             "substituted": substituted,
-            "original_name": ex["name"] if substituted else None,
             "reason": reason,
             "spinal_load": chosen_ex["spinal_load"],
             "active_muscles": chosen_ex["active_muscles"],
@@ -340,7 +260,7 @@ def autoregulate_strength_workout(readiness_score: int, user_1rm_dict: Optional[
 
     return {
         "workout": workout,
-        "note": reduction_note,
+        "note": "Sessão adaptada ao teu nível de fadiga atual.",
         "readiness_score": readiness_score,
         "spinal_score": calculate_spinal_load_score(workout)
     }
@@ -353,12 +273,11 @@ def estimate_1rm(weight: float, reps: int) -> float:
 
 
 def calculate_srpe(duration_min: float, rpe: float) -> float:
-    """Feature 30: Post-Workout RPE Feedback Loop."""
     return round(duration_min * rpe, 1)
 
 
 # ==========================================
-# PILLAR 4: BANISTER & CARGA ENGINE
+# BANISTER & FOSTER LOAD ENGINE
 # ==========================================
 def compute_foster_load_metrics(daily_loads_7d: List[float]) -> Dict[str, float]:
     if not daily_loads_7d or len(daily_loads_7d) < 7:
@@ -366,29 +285,22 @@ def compute_foster_load_metrics(daily_loads_7d: List[float]) -> Dict[str, float]
 
     weekly_load = sum(daily_loads_7d)
     mean_load = weekly_load / 7.0
-    variance = sum((x - mean_load) ** 2 for x in daily_loads_7d) / 7.0
-    sd_load = math.sqrt(variance)
+    sd_load = float(np.std(daily_loads_7d))
 
     monotony = round(mean_load / max(sd_load, 1.0), 2)
     strain = round(weekly_load * monotony, 1)
 
-    return {
-        "weekly_load": round(weekly_load, 1),
-        "mean_daily_load": round(mean_load, 1),
-        "monotony": monotony,
-        "strain": strain
-    }
+    return {"weekly_load": round(weekly_load, 1), "monotony": monotony, "strain": strain}
 
 
 def compute_acwr(daily_loads_history: List[float]) -> float:
-    """Feature 35: Acute-to-Chronic Workload Ratio (ACWR)."""
     if len(daily_loads_history) < 28:
         return 1.0
-    acute_7d = np.mean(daily_loads_history[-7:])
-    chronic_28d = np.mean(daily_loads_history[-28:])
+    acute_7d = float(np.mean(daily_loads_history[-7:]))
+    chronic_28d = float(np.mean(daily_loads_history[-28:]))
     if chronic_28d == 0:
         return 1.0
-    return round(float(acute_7d / chronic_28d), 2)
+    return round(acute_7d / chronic_28d, 2)
 
 
 def compute_banister_ctl_atl_tsb(
@@ -412,24 +324,20 @@ def compute_banister_ctl_atl_tsb(
 
 
 # ==========================================
-# PILLAR 5: LONGEVIDADE & HEALTHSPAN ENGINE
+# LONGEVITY & HEALTHSPAN
 # ==========================================
-def get_vo2_percentile(vo2_max: float, age: int, gender: str = "Male") -> str:
-    """Feature 41: VO2 Max Percentile Ranking."""
+def get_vo2_percentile(vo2_max: float, age: int) -> str:
     if vo2_max >= 58:
-        return "Top 2% (Categoria Superior / Elite)"
+        return "Top 2% (Superior / Elite)"
     elif vo2_max >= 50:
         return "Top 10% (Excelente)"
     elif vo2_max >= 42:
         return "Top 25% (Acima da Média)"
-    elif vo2_max >= 35:
-        return "Top 50% (Média Populacional)"
     else:
-        return "Abaixo da Média (Necessita Intervenção Aeróbica)"
+        return "Média Populacional"
 
 
 def calculate_biological_age(chronological_age: int, vo2_max: float, rhr: float, hrv: float) -> int:
-    """Feature 42: Biological Age Algorithm Breakdown."""
     bio_age = float(chronological_age)
     bio_age -= (vo2_max - 45) * 0.25
     bio_age += (rhr - 50) * 0.20
@@ -438,10 +346,9 @@ def calculate_biological_age(chronological_age: int, vo2_max: float, rhr: float,
 
 
 # ==========================================
-# PILLAR 6: RACE HUB ENGINE
+# RACE HUB & ADVANCED NUTRITION ENGINE
 # ==========================================
 def predict_race_time(vo2_max: float, distance_km: float) -> str:
-    """Feature 52: A-Race Goal Predictor (Riegel Adjusted)."""
     base_10k_sec = (45.0 / max(vo2_max, 25.0)) * 2500.0
     t2 = base_10k_sec * ((distance_km / 10.0) ** 1.06)
     
@@ -454,16 +361,62 @@ def predict_race_time(vo2_max: float, distance_km: float) -> str:
     return f"{mins:02d}m {secs:02d}s"
 
 
-def calculate_race_fueling(duration_hours: float, weight_kg: float, temp_c: float = 20.0) -> Dict[str, Any]:
-    """Feature 58: Hydration and Fueling Calculator."""
-    carbs_per_hour = 60 if duration_hours < 2.0 else 90
-    fluid_per_hour_ml = 500 if temp_c < 20 else (750 if temp_c < 28 else 1000)
-    sodium_mg_per_hour = 600 if temp_c < 25 else 900
+def calculate_advanced_race_nutrition(
+    weight_kg: float,
+    body_fat_pct: float,
+    gender: str,
+    age: int,
+    sport_type: str,
+    duration_hours: float,
+    temp_c: float = 22.0
+) -> Dict[str, Any]:
+    """
+    Calcula a estratégia de nutrição e hidratação personalizada com base na
+    massa magra (FFM), género, idade, tipo de desporto e clima.
+    """
+    # 1. Estimativa de Massa Magra
+    lean_mass_kg = weight_kg * (1.0 - (body_fat_pct / 100.0))
+
+    # 2. Taxa de Hidratos de Carbono por hora (g/h)
+    if "Ironman (Full)" in sport_type:
+        base_carbs_per_hr = 85.0
+    elif "Half Ironman" in sport_type or "70.3" in sport_type:
+        base_carbs_per_hr = 75.0
+    elif "Maratona" in sport_type:
+        base_carbs_per_hr = 65.0
+    else:  # 10K / Meia Maratona
+        base_carbs_per_hr = 50.0
+
+    # Ajuste por Massa Magra e Género
+    gender_factor = 1.0 if gender == "Masculino" else 0.90
+    mass_factor = lean_mass_kg / 65.0  # Normalizado a 65kg de massa magra
+    
+    final_carbs_g_hr = min(110.0, max(40.0, base_carbs_per_hr * mass_factor * gender_factor))
+    total_carbs_g = final_carbs_g_hr * duration_hours
+
+    # 3. Taxa de Hidratação (mL/h) com base no clima e peso
+    base_fluid_ml_hr = weight_kg * 8.5
+    if temp_c > 25:
+        base_fluid_ml_hr *= 1.25
+    elif temp_c > 20:
+        base_fluid_ml_hr *= 1.10
+
+    total_fluid_l = (base_fluid_ml_hr * duration_hours) / 1000.0
+
+    # 4. Sódio e Eletrólitos (mg/h)
+    sodium_mg_hr = 600.0 if temp_c < 22 else 900.0
+    total_sodium_mg = sodium_mg_hr * duration_hours
+
+    # 5. Calorias Totais de Esforço
+    total_kcal = (total_carbs_g * 4.0) + (duration_hours * weight_kg * 8.0 * 0.4)
 
     return {
-        "total_carbs_g": int(carbs_per_hour * duration_hours),
-        "carbs_per_hour_g": carbs_per_hour,
-        "fluid_per_hour_ml": fluid_per_hour_ml,
-        "total_fluid_l": round((fluid_per_hour_ml * duration_hours) / 1000.0, 2),
-        "sodium_mg_per_hour": sodium_mg_per_hour
+        "lean_mass_kg": round(lean_mass_kg, 1),
+        "carbs_per_hour_g": round(final_carbs_g_hr, 0),
+        "total_carbs_g": round(total_carbs_g, 0),
+        "fluid_per_hour_ml": round(base_fluid_ml_hr, 0),
+        "total_fluid_l": round(total_fluid_l, 2),
+        "sodium_mg_per_hour": round(sodium_mg_hr, 0),
+        "total_sodium_mg": round(total_sodium_mg, 0),
+        "total_kcal": round(total_kcal, 0)
     }
