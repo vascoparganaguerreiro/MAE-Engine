@@ -63,45 +63,43 @@ page = st.sidebar.radio(
 st.sidebar.markdown("---")
 lang = st.sidebar.selectbox("🌐 Idioma / Language", ["Português", "English"])
 
-# Inicialização dos eventos padrão na sessão
+# Inicialização dos eventos padrão categorizados na sessão
 if "user_events" not in st.session_state:
     st.session_state.user_events = [
-        {"name": "10K Prova de Dezembro", "date": date(2026, 12, 15)},
-        {"name": "Meia Maratona de Berlim", "date": date(2027, 4, 4)},
-        {"name": "Triatlo Olímpico", "date": date(2027, 9, 12)},
-        {"name": "IRONMAN 70.3 Cascais", "date": date(2027, 10, 17)}
+        {"name": "10K Prova de Dezembro", "date": date(2026, 12, 15), "category": "Corrida"},
+        {"name": "Meia Maratona de Berlim", "date": date(2027, 4, 4), "category": "Corrida"},
+        {"name": "Triatlo Olímpico", "date": date(2027, 9, 12), "category": "Triatlo"},
+        {"name": "IRONMAN 70.3 Cascais", "date": date(2027, 10, 17), "category": "Triatlo"}
     ]
 
 TEXTS = {
     "Português": {
         "title": "📊 Painel Fisiológico & Main Details",
-        "subtitle": "Visão geral multivariável resumida com os principais indicadores de prontidão, recuperação e composição.",
+        "subtitle": "Visão geral executiva com os biomarcadores essenciais de prontidão, recuperação e composição corporal.",
         "sync_btn": "🔄 Sincronizar Dados",
         "fetching": "A consultar a nuvem Garmin e a processar biomarcadores...",
         "training_readiness": "Prontidão de Treino",
         "hrv_status": "Estado do VRC (HRV)",
         "bb_current": "Body Battery Atual",
-        "table_title": "📋 Resumo Comparativo de Recuperação (14d)",
-        "metrics": ["Pontuação de Sono", "VRC Noturno (ms)", "Body Battery (Pico)", "FC Repouso (bpm)", "Stress Diário", "Frequência Respiratória (brpm)"],
+        "sleep_score": "Sono Noturno",
+        "table_title": "📋 Resumo de Recuperação Executivo (14d)",
+        "metrics": ["Pontuação de Sono", "VRC Noturno (ms)", "Body Battery (Pico)", "FC Repouso (bpm)", "Stress Diário"],
         "cols": ["Métrica", "Hoje", "Média 3d", "Média 7d", "Média 14d"],
-        "charts_title": "📈 Tendências Históricas Fisiológicas (14 Dias)",
-        "tabs": ["VRC (HRV) & Sono", "FC Repouso & Stress", "Body Battery (Pico)"],
-        "presc_title": "🏋️ Prescrição Adaptativa Rápida"
+        "charts_title": "📈 Curvas Fisiológicas Principais (14 Dias)"
     },
     "English": {
         "title": "📊 Physiological Dashboard & Main Details",
-        "subtitle": "Summarized multivariable overview featuring key readiness, recovery, and composition metrics.",
+        "subtitle": "Executive summary featuring core readiness, recovery, and body composition biomarkers.",
         "sync_btn": "🔄 Synchronize Data",
         "fetching": "Fetching Garmin Cloud data and processing biomarkers...",
         "training_readiness": "Training Readiness",
         "hrv_status": "HRV Status",
         "bb_current": "Current Body Battery",
-        "table_title": "📋 Recovery Comparison Summary (14d)",
-        "metrics": ["Sleep Score", "Overnight HRV (ms)", "Body Battery (Peak)", "Resting HR (bpm)", "Daily Stress", "Respiration Rate (brpm)"],
+        "sleep_score": "Overnight Sleep",
+        "table_title": "📋 Executive Recovery Summary (14d)",
+        "metrics": ["Sleep Score", "Overnight HRV (ms)", "Body Battery (Peak)", "Resting HR (bpm)", "Daily Stress"],
         "cols": ["Metric", "Today", "3-Day Avg", "7-Day Avg", "14-Day Avg"],
-        "charts_title": "📈 Physiological Trend Curves (Last 14 Days)",
-        "tabs": ["HRV & Sleep", "Resting HR & Stress", "Body Battery (Peak)"],
-        "presc_title": "🏋️ Quick Adaptive Prescription"
+        "charts_title": "📈 Core Physiological Trend Curves (14 Days)"
     }
 }
 t = TEXTS[lang]
@@ -112,8 +110,15 @@ def calculate_avg(values):
         return "N/A"
     return round(sum(valid_values) / len(valid_values), 1)
 
+def format_seconds_to_hhmm(seconds):
+    if not seconds or not isinstance(seconds, (int, float)):
+        return "N/A"
+    hrs = int(seconds // 3600)
+    mins = int((seconds % 3600) // 60)
+    return f"{hrs}h {mins}m"
+
 # ==========================================
-# FUNÇÃO CENTRAL DE EXTRAÇÃO GARMIN (CACHE)
+# FUNÇÃO CENTRAL DE EXTRAÇÃO GARMIN
 # ==========================================
 @st.cache_data(ttl=3600)
 def fetch_garmin_data_user(email, password):
@@ -122,20 +127,31 @@ def fetch_garmin_data_user(email, password):
     
     today = date.today()
     sleep_hist, hrv_hist, bb_peak_hist, rhr_hist, stress_hist, resp_hist = [], [], [], [], [], []
+    deep_sleep_hist, rem_sleep_hist, light_sleep_hist, awake_hist = [], [], [], []
     dates_list = []
     body_records = []
 
-    # 1. Indicadores Fisiológicos dos Últimos 14 Dias
+    # 1. Indicadores Fisiológicos e Sono Avançado (14 Dias)
     for days_back in range(13, -1, -1):
         current_date_obj = today - timedelta(days=days_back)
         current_date = current_date_obj.strftime("%Y-%m-%d")
         dates_list.append(current_date_obj.strftime("%d/%m"))
         
+        # Extração de Sono Detalhado
         try:
             sleep_data = client.get_sleep_data(current_date)
-            sleep_hist.append(sleep_data.get("dailySleepDTO", {}).get("sleepScores", {}).get("overall", {}).get("value"))
+            dto = sleep_data.get("dailySleepDTO", {})
+            sleep_hist.append(dto.get("sleepScores", {}).get("overall", {}).get("value"))
+            deep_sleep_hist.append(dto.get("deepSleepSeconds"))
+            rem_sleep_hist.append(dto.get("remSleepSeconds"))
+            light_sleep_hist.append(dto.get("lightSleepSeconds"))
+            awake_hist.append(dto.get("awakeSleepSeconds"))
         except Exception:
             sleep_hist.append(None)
+            deep_sleep_hist.append(None)
+            rem_sleep_hist.append(None)
+            light_sleep_hist.append(None)
+            awake_hist.append(None)
 
         try:
             hrv_data = client.get_hrv_data(current_date)
@@ -258,6 +274,7 @@ def fetch_garmin_data_user(email, password):
 
     sleep_rev, hrv_rev, bb_peak_rev = sleep_hist[::-1], hrv_hist[::-1], bb_peak_hist[::-1]
     rhr_rev, stress_rev, resp_rev = rhr_hist[::-1], stress_hist[::-1], resp_hist[::-1]
+    deep_rev, rem_rev, light_rev, awake_rev = deep_sleep_hist[::-1], rem_sleep_hist[::-1], light_sleep_hist[::-1], awake_hist[::-1]
 
     df_history = pd.DataFrame({
         "Date": dates_list,
@@ -278,6 +295,10 @@ def fetch_garmin_data_user(email, password):
         "rhr": [rhr_rev[0], calculate_avg(rhr_rev[:3]), calculate_avg(rhr_rev[:7]), calculate_avg(rhr_rev)],
         "stress": [stress_rev[0], calculate_avg(stress_rev[:3]), calculate_avg(stress_rev[:7]), calculate_avg(stress_rev)],
         "resp": [resp_rev[0], calculate_avg(resp_rev[:3]), calculate_avg(resp_rev[:7]), calculate_avg(resp_rev)],
+        "deep_sleep_today": deep_rev[0],
+        "rem_sleep_today": rem_rev[0],
+        "light_sleep_today": light_rev[0],
+        "awake_today": awake_rev[0],
         "df_history": df_history,
         "body_records": body_records
     }
@@ -291,6 +312,7 @@ else:
         "hrv_status": "N/A", "bb_current": "N/A", "training_readiness": "N/A",
         "sleep": ["N/A"]*4, "hrv": ["N/A"]*4, "bb_peak": ["N/A"]*4,
         "rhr": ["N/A"]*4, "stress": ["N/A"]*4, "resp": ["N/A"]*4,
+        "deep_sleep_today": None, "rem_sleep_today": None, "light_sleep_today": None, "awake_today": None,
         "df_history": pd.DataFrame(), "body_records": []
     }
 
@@ -319,7 +341,9 @@ with st.sidebar.expander("🤖 Assistente IA Gemini", expanded=False):
                 Prontidão de Treino: {data['training_readiness']}
                 Estado VRC: {data['hrv_status']}
                 Body Battery: {data['bb_current']}
-                Sono Hoje: {data['sleep'][0]}
+                Pontuação Sono Hoje: {data['sleep'][0]}
+                Sono Profundo: {format_seconds_to_hhmm(data['deep_sleep_today'])}
+                Sono REM: {format_seconds_to_hhmm(data['rem_sleep_today'])}
                 Composição Corporal Recente: {data['body_records'][-1] if data['body_records'] else 'Sem registo'}
                 """
                 prompt = f"{contexto}\n\nPergunta: {user_query}"
@@ -336,7 +360,7 @@ with st.sidebar.expander("🤖 Assistente IA Gemini", expanded=False):
 # ==========================================
 if page == "🎯 Goals & Eventos":
     st.title("🎯 Central de Eventos & Objetivos")
-    st.markdown("Gestão cronológica de provas alvo com contagem decrescente em tempo real.")
+    st.markdown("Gestão cronológica de provas alvo categorizadas por modalidade desportiva.")
     
     body_goal_options = [
         "Hipertrofia Estética (V-Taper & Densidade)",
@@ -358,6 +382,7 @@ if page == "🎯 Goals & Eventos":
     now = datetime.now()
     sorted_events = sorted(st.session_state.user_events, key=lambda x: x["date"])
 
+    # Gráfico em Destaque no Topo (Próximo Desafio)
     if sorted_events:
         next_event = sorted_events[0]
         event_dt = datetime.combine(next_event["date"], datetime.min.time())
@@ -368,8 +393,11 @@ if page == "🎯 Goals & Eventos":
 
         st.markdown(f"""
         <div style="background: linear-gradient(135deg, #1E222B 0%, #111827 100%); border-radius: 16px; padding: 26px; border: 2px solid #10B981; margin-bottom: 24px;">
-            <div style="color: #10B981; font-size: 0.85rem; font-weight: 800; text-transform: uppercase;">PRÓXIMO DESAFIO PRINCIPAL</div>
-            <div style="color: #FFFFFF; font-size: 2.2rem; font-weight: 900; margin: 6px 0;">🏆 {next_event['name']}</div>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div style="color: #10B981; font-size: 0.85rem; font-weight: 800; text-transform: uppercase;">PRÓXIMO DESAFIO PRINCIPAL</div>
+                <span style="background-color: rgba(16, 185, 129, 0.2); color: #10B981; padding: 4px 12px; border-radius: 20px; font-weight: 700; font-size: 0.8rem;">{next_event.get('category', 'Geral')}</span>
+            </div>
+            <div style="color: #FFFFFF; font-size: 2.2rem; font-weight: 900; margin: 8px 0;">🏆 {next_event['name']}</div>
             <div style="color: #9CA3AF; font-size: 0.95rem; margin-bottom: 18px;">📅 {next_event['date'].strftime('%d/%m/%Y')}</div>
             <div style="display: flex; gap: 16px;">
                 <div style="background-color: rgba(16, 185, 129, 0.15); padding: 10px 22px; border-radius: 10px; border: 1px solid rgba(16, 185, 129, 0.3);">
@@ -388,32 +416,44 @@ if page == "🎯 Goals & Eventos":
         </div>
         """, unsafe_allow_html=True)
 
-    st.subheader("📅 Cronograma Completo de Provas")
-    for ev in sorted_events:
-        event_dt = datetime.combine(ev["date"], datetime.min.time())
-        delta_ev = event_dt - now
-        d_left = max(0, delta_ev.days)
-        h_left = max(0, delta_ev.seconds // 3600)
-        m_left = max(0, (delta_ev.seconds % 3600) // 60)
-        
-        col_n, col_d, col_t = st.columns([3, 2, 2])
-        col_n.markdown(f"**📌 {ev['name']}**")
-        col_d.caption(f"🗓️ {ev['date'].strftime('%d/%m/%Y')}")
-        col_t.markdown(f"⏱️ **{d_left}d {h_left}h {m_left}m restantes**")
-        st.divider()
+    st.subheader("📅 Cronograma de Provas & Filtros por Modalidade")
+    
+    # Filtro de Modalidade para os Eventos
+    categories_list = ["Todas", "Corrida", "Triatlo", "Ciclismo", "Natação", "Musculação / Ginásio", "Outro"]
+    selected_cat = st.selectbox("🔍 Filtrar Provas por Categoria:", options=categories_list)
+
+    filtered_events = sorted_events if selected_cat == "Todas" else [e for e in sorted_events if e.get("category", "Outro") == selected_cat]
+
+    if filtered_events:
+        for ev in filtered_events:
+            event_dt = datetime.combine(ev["date"], datetime.min.time())
+            delta_ev = event_dt - now
+            d_left = max(0, delta_ev.days)
+            h_left = max(0, delta_ev.seconds // 3600)
+            m_left = max(0, (delta_ev.seconds % 3600) // 60)
+            
+            col_n, col_c, col_d, col_t = st.columns([3, 2, 2, 2])
+            col_n.markdown(f"**📌 {ev['name']}**")
+            col_c.caption(f"🏷️ {ev.get('category', 'Outro')}")
+            col_d.caption(f"🗓️ {ev['date'].strftime('%d/%m/%Y')}")
+            col_t.markdown(f"⏱️ **{d_left}d {h_left}h {m_left}m restantes**")
+            st.divider()
+    else:
+        st.info("ℹ️ Nenhum evento encontrado para a categoria selecionada.")
 
     with st.expander("⚙️ Gerir Lista de Eventos (Adicionar / Eliminar)"):
         if len(st.session_state.user_events) < 15:
             if st.button("➕ Adicionar Novo Evento", use_container_width=True):
-                st.session_state.user_events.append({"name": f"Novo Evento {len(st.session_state.user_events)+1}", "date": date.today() + timedelta(days=90)})
+                st.session_state.user_events.append({"name": f"Novo Evento {len(st.session_state.user_events)+1}", "date": date.today() + timedelta(days=90), "category": "Corrida"})
                 st.rerun()
 
         events_to_remove = []
         for idx, ev in enumerate(st.session_state.user_events):
-            c1, c2, c3 = st.columns([3, 2, 1])
+            c1, c2, c3, c4 = st.columns([3, 2, 2, 1])
             st.session_state.user_events[idx]["name"] = c1.text_input(f"Nome #{idx+1}", value=ev["name"], key=f"g_name_{idx}")
             st.session_state.user_events[idx]["date"] = c2.date_input(f"Data #{idx+1}", value=ev["date"], key=f"g_date_{idx}")
-            if c3.button("🗑️", key=f"g_del_{idx}"):
+            st.session_state.user_events[idx]["category"] = c3.selectbox(f"Categoria #{idx+1}", options=["Corrida", "Triatlo", "Ciclismo", "Natação", "Musculação / Ginásio", "Outro"], index=["Corrida", "Triatlo", "Ciclismo", "Natação", "Musculação / Ginásio", "Outro"].index(ev.get("category", "Corrida")), key=f"g_cat_{idx}")
+            if c4.button("🗑️", key=f"g_del_{idx}"):
                 events_to_remove.append(idx)
         
         if events_to_remove:
@@ -427,15 +467,43 @@ if page == "🎯 Goals & Eventos":
 # ==========================================
 if page == "😴 Sono & Recuperação Avançada":
     st.title("😴 Sono & Recuperação Avançada")
-    st.markdown("Análise da arquitetura do sono e métricas noturnas da Garmin.")
+    st.markdown("Análise detalhada da arquitetura do sono (REM, Profundo, Leve) e métricas noturnas extraídas da Garmin.")
     
+    # Cartões de Topo da Arquitetura do Sono
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Sono Total (Hoje)", f"{data['sleep'][0] if data['sleep'][0] != 'N/A' else '--'} /100")
-    c2.metric("Média 3 Dias", f"{data['sleep'][1]}")
-    c3.metric("Média 7 Dias", f"{data['sleep'][2]}")
-    c4.metric("Média 14 Dias", f"{data['sleep'][3]}")
+    c1.metric("Pontuação de Sono", f"{data['sleep'][0] if data['sleep'][0] != 'N/A' else '--'} /100")
+    c2.metric("Sono Profundo", format_seconds_to_hhmm(data['deep_sleep_today']))
+    c3.metric("Sono REM", format_seconds_to_hhmm(data['rem_sleep_today']))
+    c4.metric("Sono Leve", format_seconds_to_hhmm(data['light_sleep_today']))
     
-    st.info("💡 A integração detalhada das fases individuais de sono via Garmin Connect será renderizada aqui.")
+    st.divider()
+
+    # Métricas Fisiológicas Noturnas Adicionais
+    st.subheader("🌙 Biomarcadores Fisiológicos Noturnos")
+    col_s1, col_s2, col_s3, col_s4 = st.columns(4)
+    col_s1.metric("VRC Noturno (Média)", f"{data['hrv'][0]} ms" if data['hrv'][0] != 'N/A' else "N/A")
+    col_s2.metric("FC Repouso Noturna", f"{data['rhr'][0]} bpm" if data['rhr'][0] != 'N/A' else "N/A")
+    col_s3.metric("Freq. Respiratória", f"{data['resp'][0]} brpm" if data['resp'][0] != 'N/A' else "N/A")
+    col_s4.metric("Tempo Acordado", format_seconds_to_hhmm(data['awake_today']))
+
+    st.divider()
+
+    # Tabela e Gráfico de Tendência de Sono (14d)
+    st.subheader("📈 Linha de Tendência da Qualidade do Sono (14 Dias)")
+    if not data["df_history"].empty:
+        st.line_chart(data["df_history"][["Sleep / Sono", "HRV / VRC (ms)"]])
+        
+        st.subheader("📋 Médias Comparativas da Qualidade de Sono")
+        df_sleep_summary = pd.DataFrame({
+            "Métrica": ["Pontuação de Sono", "VRC Noturno (ms)", "FC Repouso (bpm)", "Frequência Respiratória (brpm)"],
+            "Hoje": [data['sleep'][0], data['hrv'][0], data['rhr'][0], data['resp'][0]],
+            "Média 3 Dias": [data['sleep'][1], data['hrv'][1], data['rhr'][1], data['resp'][1]],
+            "Média 7 Dias": [data['sleep'][2], data['hrv'][2], data['rhr'][2], data['resp'][2]],
+            "Média 14 Dias": [data['sleep'][3], data['hrv'][3], data['rhr'][3], data['resp'][3]],
+        })
+        st.dataframe(df_sleep_summary, use_container_width=True, hide_index=True)
+    else:
+        st.info("ℹ️ Efetue o login na barra lateral para carregar a arquitetura completa de sono.")
     st.stop()
 
 # ==========================================
@@ -569,7 +637,7 @@ if page == "📜 Histórico de Treinos & Análise":
     st.stop()
 
 # ==========================================
-# PÁGINA 1: DASHBOARD FISIOLÓGICO DA GARMIN (PADRÃO)
+# PÁGINA 1: DASHBOARD FISIOLÓGICO DA GARMIN (PADRÃO - PREMIUM MAIN DETAILS)
 # ==========================================
 st.markdown("""
 <style>
@@ -598,19 +666,21 @@ with col_header_right:
         st.cache_data.clear()
         st.rerun()
 
+# 4 CARTÕES EXECUTIVOS DE TOPO (SEM PALHA)
 st.markdown("""
 <style>
 .metric-card { background-color: #1E222B; border-radius: 12px; padding: 18px 20px; border-left: 4px solid #3B82F6; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2); margin-bottom: 20px; }
 .metric-card.readiness { border-left-color: #10B981; }
 .metric-card.hrv { border-left-color: #8B5CF6; }
 .metric-card.battery { border-left-color: #06B6D4; }
+.metric-card.sleep { border-left-color: #F59E0B; }
 .metric-label { font-size: 0.85rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #9CA3AF; margin-bottom: 6px; }
 .metric-value { font-size: 2.1rem; font-weight: 700; color: #FFFFFF; line-height: 1.1; }
 .metric-sub { font-size: 0.78rem; color: #6B7280; margin-top: 4px; }
 </style>
 """, unsafe_allow_html=True)
 
-col1, col2, col3 = st.columns(3)
+col1, col2, col3, col4 = st.columns(4)
 
 with col1:
     st.markdown(f"""
@@ -625,8 +695,8 @@ with col2:
     st.markdown(f"""
     <div class="metric-card hrv">
         <div class="metric-label">🫀 {t['hrv_status']}</div>
-        <div class="metric-value" style="font-size: 1.7rem;">{data['hrv_status']}</div>
-        <div class="metric-sub">Equilíbrio Autonómico</div>
+        <div class="metric-value" style="font-size: 1.6rem;">{data['hrv_status']}</div>
+        <div class="metric-sub">VRC Noturno ({data['hrv'][0]} ms)</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -635,30 +705,46 @@ with col3:
     <div class="metric-card battery">
         <div class="metric-label">🔋 {t['bb_current']}</div>
         <div class="metric-value">{data['bb_current']} <span style="font-size: 1.1rem; color: #6B7280;">/100</span></div>
-        <div class="metric-sub">Reserva de Energia em Tempo Real</div>
+        <div class="metric-sub">Reserva de Energia Atual</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+with col4:
+    st.markdown(f"""
+    <div class="metric-card sleep">
+        <div class="metric-label">😴 {t['sleep_score']}</div>
+        <div class="metric-value">{data['sleep'][0] if data['sleep'][0] != 'N/A' else '--'} <span style="font-size: 1.1rem; color: #6B7280;">/100</span></div>
+        <div class="metric-sub">Profundo: {format_seconds_to_hhmm(data['deep_sleep_today'])}</div>
     </div>
     """, unsafe_allow_html=True)
 
 st.divider()
 
+# DESTAQUES RÁPIDOS DAS OUTRAS SUBCATEGORIAS (MAIN DETAILS)
+latest_body = data['body_records'][-1] if data['body_records'] else None
+
+st.subheader("📌 Resumo Fisiológico Executivo & Composição")
+mb1, mb2, mb3, mb4 = st.columns(4)
+mb1.metric("FC Repouso (Hoje)", f"{data['rhr'][0]} bpm" if data['rhr'][0] != 'N/A' else "N/A", f"{round(data['rhr'][0] - data['rhr'][3], 1)} bpm vs 14d" if isinstance(data['rhr'][0], (int, float)) and isinstance(data['rhr'][3], (int, float)) else None)
+mb2.metric("Nível de Stress (Hoje)", f"{data['stress'][0]}" if data['stress'][0] != 'N/A' else "N/A")
+mb3.metric("Peso Corporal Atual", f"{latest_body['Peso (kg)']} kg" if latest_body else "N/A")
+mb4.metric("% Gordura Corporal", f"{latest_body['Gordura Corporal (%)']}%" if latest_body and latest_body['Gordura Corporal (%)'] else "N/A")
+
+st.divider()
+
+# TABELA COMPARATIVA RESUMIDA & TENDÊNCIAS
 if not data["df_history"].empty:
     st.subheader(t["table_title"])
     df_metrics = pd.DataFrame({
         t["cols"][0]: t["metrics"],
-        t["cols"][1]: [data['sleep'][0], data['hrv'][0], data['bb_peak'][0], data['rhr'][0], data['stress'][0], data['resp'][0]],
-        t["cols"][2]: [data['sleep'][1], data['hrv'][1], data['bb_peak'][1], data['rhr'][1], data['stress'][1], data['resp'][1]],
-        t["cols"][3]: [data['sleep'][2], data['hrv'][2], data['bb_peak'][2], data['rhr'][2], data['stress'][2], data['resp'][2]],
-        t["cols"][4]: [data['sleep'][3], data['hrv'][3], data['bb_peak'][3], data['rhr'][3], data['stress'][3], data['resp'][3]],
+        t["cols"][1]: [data['sleep'][0], data['hrv'][0], data['bb_peak'][0], data['rhr'][0], data['stress'][0]],
+        t["cols"][2]: [data['sleep'][1], data['hrv'][1], data['bb_peak'][1], data['rhr'][1], data['stress'][1]],
+        t["cols"][3]: [data['sleep'][2], data['hrv'][2], data['bb_peak'][2], data['rhr'][2], data['stress'][2]],
+        t["cols"][4]: [data['sleep'][3], data['hrv'][3], data['bb_peak'][3], data['rhr'][3], data['stress'][3]],
     })
     st.dataframe(df_metrics, use_container_width=True, hide_index=True)
 
     st.subheader(t["charts_title"])
-    tab1, tab2, tab3 = st.tabs(t["tabs"])
-    with tab1:
-        st.line_chart(data["df_history"][["HRV / VRC (ms)", "Sleep / Sono"]])
-    with tab2:
-        st.line_chart(data["df_history"][["RHR / FC Repouso (bpm)", "Stress"]])
-    with tab3:
-        st.line_chart(data["df_history"][["Body Battery Peak"]])
+    st.line_chart(data["df_history"][["HRV / VRC (ms)", "Sleep / Sono", "RHR / FC Repouso (bpm)"]])
 else:
-    st.info("ℹ️ Efetue a sincronização na barra lateral para visualizar as curvas fisiológicas.")
+    st.info("ℹ️ Efetue a sincronização na barra lateral para carregar a matriz de dados fisiológicos.")
