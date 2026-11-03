@@ -38,7 +38,7 @@ TEXTS = {
         "title": "📊 Painel Fisiológico & Auto-Regulação de Treino",
         "subtitle": "Análise multivariável em tempo real cruzando a recuperação atual com linhas de tendência de 3d, 7d e 14d.",
         "sync_btn": "🔄 Synchronize Data",
-        "fetching": "A consultar a nuvem Garmin e a processar tendências de 14 dias...",
+        "fetching": "A consultar a nuvem Garmin e a processar tendências fisiológicas...",
         "training_readiness": "Prontidão de Treino",
         "hrv_status": "Estado do VRC (HRV)",
         "bb_current": "Body Battery Atual",
@@ -71,7 +71,7 @@ TEXTS = {
         "title": "📊 Physiological Dashboard & Workout Auto-Regulation",
         "subtitle": "Real-time multivariable analysis crossing current recovery with 3d, 7d, and 14d trendlines.",
         "sync_btn": "🔄 Synchronize Garmin",
-        "fetching": "Fetching Garmin Cloud data and processing 14-day trends...",
+        "fetching": "Fetching Garmin Cloud data and processing physiological trends...",
         "training_readiness": "Training Readiness",
         "hrv_status": "HRV Status",
         "bb_current": "Current Body Battery",
@@ -103,6 +103,186 @@ TEXTS = {
 }
 
 t = TEXTS[lang]
+
+# ==========================================
+# CONFIGURAÇÃO DE CREDENCIAIS & API GARMIN
+# ==========================================
+EMAIL = "Vascoparganaguerreiro@gmail.com"
+PASSWORD = "Vasco1234"
+
+def calculate_avg(values):
+    valid_values = [v for v in values if isinstance(v, (int, float))]
+    if not valid_values:
+        return "N/A"
+    return round(sum(valid_values) / len(valid_values), 1)
+
+@st.cache_data(ttl=3600)
+def fetch_garmin_data():
+    client = Garmin(EMAIL, PASSWORD)
+    client.login()
+    
+    today = date.today()
+    sleep_hist, hrv_hist, bb_peak_hist, rhr_hist, stress_hist, resp_hist = [], [], [], [], [], []
+    dates_list = []
+    body_records = []
+
+    # 1. Obter dados fisiológicos dos últimos 14 dias
+    for days_back in range(13, -1, -1):
+        current_date_obj = today - timedelta(days=days_back)
+        current_date = current_date_obj.strftime("%Y-%m-%d")
+        dates_list.append(current_date_obj.strftime("%d/%m"))
+        
+        try:
+            sleep_data = client.get_sleep_data(current_date)
+            sleep_hist.append(sleep_data.get("dailySleepDTO", {}).get("sleepScores", {}).get("overall", {}).get("value"))
+        except Exception:
+            sleep_hist.append(None)
+
+        try:
+            hrv_data = client.get_hrv_data(current_date)
+            hrv_hist.append(hrv_data.get("hrvSummary", {}).get("lastNightAvg"))
+        except Exception:
+            hrv_hist.append(None)
+
+        try:
+            summary = client.get_user_summary(current_date)
+            bb_high = summary.get("bodyBatteryHighestValue") if isinstance(summary, dict) else None
+        
+            if bb_high is None:
+                bb_data = client.get_body_battery(current_date)
+                vals = []
+                if isinstance(bb_data, list):
+                    for entry in bb_data:
+                        if isinstance(entry, dict):
+                            arr = entry.get("bodyBatteryValuesArray") or entry.get("bodyBatteryValues") or []
+                            if isinstance(arr, list):
+                                for pt in arr:
+                                    val = pt[1] if isinstance(pt, (list, tuple)) and len(pt) > 1 else (pt.get("value") if isinstance(pt, dict) else None)
+                                    if val is not None and isinstance(val, (int, float)):
+                                        vals.append(val)
+                            else:
+                                val = entry.get("bodyBatteryLevel") or entry.get("bodyBatteryValue") or entry.get("value")
+                                if val is not None and isinstance(val, (int, float)):
+                                    vals.append(val)
+                bb_high = max(vals) if vals else None
+
+            bb_peak_hist.append(bb_high)
+        except Exception:
+            bb_peak_hist.append(None)
+            
+        try:
+            stats = client.get_user_summary(current_date)
+            rhr_hist.append(stats.get("restingHeartRate"))
+        except Exception:
+            rhr_hist.append(None)
+
+        try:
+            stats = client.get_user_summary(current_date)
+            stress_val = stats.get("averageStressLevel")
+            if stress_val is None or stress_val == -1:
+                stress_data = client.get_stress_data(current_date)
+                stress_val = stress_data.get("averageStressLevel")
+            stress_hist.append(stress_val if isinstance(stress_val, (int, float)) and stress_val >= 0 else None)
+        except Exception:
+            stress_hist.append(None)
+
+        try:
+            resp_data = client.get_respiration_data(current_date)
+            resp_val = resp_data.get("avgWakingRespirationValue") or resp_data.get("avgSleepRespirationValue")
+            if resp_val is None:
+                sleep_raw = client.get_sleep_data(current_date)
+                resp_val = sleep_raw.get("dailySleepDTO", {}).get("averageRespirationValue")
+            resp_hist.append(resp_val)
+        except Exception:
+            resp_hist.append(None)
+
+    today_str = today.strftime("%Y-%m-%d")
+    hrv_status_str = "BALANCED"
+    try:
+        hrv_status_str = client.get_hrv_data(today_str).get("hrvSummary", {}).get("status", "BALANCED")
+    except Exception:
+        pass
+
+    bb_current = None
+    try:
+        summary_today = client.get_user_summary(today_str)
+        if isinstance(summary_today, dict):
+            bb_current = summary_today.get("bodyBatteryMostRecentValue") or summary_today.get("bodyBatteryLevel")
+    except Exception:
+        pass
+
+    training_readiness = "N/A"
+    try:
+        readiness = client.get_training_readiness(today_str)
+        if isinstance(readiness, list) and readiness:
+            item = readiness[0] if isinstance(readiness[0], dict) else readiness[-1]
+            training_readiness = item.get("score") or item.get("scoreValue") or item.get("value", "N/A")
+        elif isinstance(readiness, dict):
+            training_readiness = readiness.get("score") or readiness.get("scoreValue") or readiness.get("value", "N/A")
+    except Exception:
+        pass
+
+    # 2. Puxar Histórico Real da Balança Garmin Index S2 (Janela alargada de 90 Dias)
+    start_body_date = (today - timedelta(days=90)).strftime("%Y-%m-%d")
+    try:
+        body_comp_raw = client.get_body_composition(start_body_date, today_str)
+        weight_list = body_comp_raw.get("dateWeightList", []) if isinstance(body_comp_raw, dict) else (body_comp_raw if isinstance(body_comp_raw, list) else [])
+        
+        for record in weight_list:
+            if isinstance(record, dict):
+                raw_date = record.get("samplePk") or record.get("date") or record.get("calendarDate")
+                dt_str = str(raw_date)[:10] if raw_date else None
+                
+                w_kg = record.get("weight", 0) / 1000.0 if record.get("weight", 0) > 200 else record.get("weight")
+                fat_pct = record.get("bodyFat")
+                muscle_kg = record.get("muscleMass", 0) / 1000.0 if record.get("muscleMass", 0) > 200 else record.get("muscleMass")
+                water_pct = record.get("bodyWater")
+                bone_kg = record.get("boneMass", 0) / 1000.0 if record.get("boneMass", 0) > 200 else record.get("boneMass")
+                bmi_val = record.get("bmi")
+                
+                if dt_str and w_kg:
+                    body_records.append({
+                        "Data": dt_str,
+                        "Peso (kg)": round(w_kg, 1),
+                        "Gordura Corporal (%)": round(fat_pct, 1) if fat_pct is not None else None,
+                        "Massa Muscular (kg)": round(muscle_kg, 1) if muscle_kg is not None else None,
+                        "Água Corporal (%)": round(water_pct, 1) if water_pct is not None else None,
+                        "Massa Óssea (kg)": round(bone_kg, 1) if bone_kg is not None else None,
+                        "IMC": round(bmi_val, 1) if bmi_val is not None else None
+                    })
+    except Exception:
+        pass
+
+    sleep_rev, hrv_rev, bb_peak_rev = sleep_hist[::-1], hrv_hist[::-1], bb_peak_hist[::-1]
+    rhr_rev, stress_rev, resp_rev = rhr_hist[::-1], stress_hist[::-1], resp_hist[::-1]
+
+    df_history = pd.DataFrame({
+        "Date": dates_list,
+        "HRV / VRC (ms)": hrv_hist,
+        "Sleep / Sono": sleep_hist,
+        "RHR / FC Repouso (bpm)": rhr_hist,
+        "Stress": stress_hist,
+        "Body Battery Peak": bb_peak_hist
+    }).set_index("Date")
+
+    return {
+        "hrv_status": hrv_status_str,
+        "bb_current": bb_current,
+        "training_readiness": training_readiness,
+        "sleep": [sleep_rev[0], calculate_avg(sleep_rev[:3]), calculate_avg(sleep_rev[:7]), calculate_avg(sleep_rev)],
+        "hrv": [hrv_rev[0], calculate_avg(hrv_rev[:3]), calculate_avg(hrv_rev[:7]), calculate_avg(hrv_rev)],
+        "bb_peak": [bb_peak_rev[0], calculate_avg(bb_peak_rev[:3]), calculate_avg(bb_peak_rev[:7]), calculate_avg(bb_peak_rev)],
+        "rhr": [rhr_rev[0], calculate_avg(rhr_rev[:3]), calculate_avg(rhr_rev[:7]), calculate_avg(rhr_rev)],
+        "stress": [stress_rev[0], calculate_avg(stress_rev[:3]), calculate_avg(stress_rev[:7]), calculate_avg(stress_rev)],
+        "resp": [resp_rev[0], calculate_avg(resp_rev[:3]), calculate_avg(resp_rev[:7]), calculate_avg(resp_rev)],
+        "df_history": df_history,
+        "body_records": body_records
+    }
+
+# CARREGAMENTO GLOBAL DOS DADOS GARMIN (Disponível para todas as abas)
+with st.spinner(t["fetching"]):
+    data = fetch_garmin_data()
+
 
 # ==========================================
 # PÁGINA 2: GOALS & EVENTOS DEDICADA
@@ -221,7 +401,7 @@ if page == "⚖️ Composição Corporal & Peso":
     st.title("⚖️ Composição Corporal & Peso (Garmin Index S2)")
     st.markdown("Acompanhamento interativo da bioimpedância e tendências de composição corporal.")
     
-    # Puxa o histórico real sincronizado da Garmin
+    # Extrai o histórico real retornado da API Garmin
     records = data.get("body_records", [])
     
     if records:
@@ -249,7 +429,7 @@ if page == "⚖️ Composição Corporal & Peso":
 
         st.divider()
 
-        # Seletor de Métricas Multivariável (Gráfico Estilo Garmin)
+        # Seletor Multivariável de Métricas (Gráfico Interativo Estilo Garmin)
         st.subheader("📈 Análise de Tendências Personalizada")
         st.caption("Seleciona uma ou mais métricas para cruzar no mesmo gráfico (ex: Massa Muscular + % Gordura).")
 
@@ -273,10 +453,9 @@ if page == "⚖️ Composição Corporal & Peso":
         st.dataframe(df_body, use_container_width=True)
 
     else:
-        st.info("ℹ️ Não foram encontrados registos de composição corporal da balança Garmin Index S2.")
+        st.info("ℹ️ Não foram encontrados registos de composição corporal da balança Garmin Index S2 no período consultado.")
 
     st.stop()
-
 
 # ==========================================
 # PÁGINA 5: HISTÓRICO DE TREINOS & ANÁLISE
@@ -358,183 +537,11 @@ with col_header_left:
 with col_header_right:
     sync_pressed = st.button(t["sync_btn"], use_container_width=True)
 
-EMAIL = "Vascoparganaguerreiro@gmail.com"
-PASSWORD = "Vasco1234"
-
-def calculate_avg(values):
-    valid_values = [v for v in values if isinstance(v, (int, float))]
-    if not valid_values:
-        return "N/A"
-    return round(sum(valid_values) / len(valid_values), 1)
-
-@st.cache_data(ttl=3600)
-def fetch_garmin_data():
-    client = Garmin(EMAIL, PASSWORD)
-    client.login()
-    
-    today = date.today()
-    sleep_hist, hrv_hist, bb_peak_hist, rhr_hist, stress_hist, resp_hist = [], [], [], [], [], []
-    dates_list = []
-    body_records = []
-
-    for days_back in range(13, -1, -1):
-        current_date_obj = today - timedelta(days=days_back)
-        current_date = current_date_obj.strftime("%Y-%m-%d")
-        dates_list.append(current_date_obj.strftime("%d/%m"))
-        
-        try:
-            sleep_data = client.get_sleep_data(current_date)
-            sleep_hist.append(sleep_data.get("dailySleepDTO", {}).get("sleepScores", {}).get("overall", {}).get("value"))
-        except Exception:
-            sleep_hist.append(None)
-
-        try:
-            hrv_data = client.get_hrv_data(current_date)
-            hrv_hist.append(hrv_data.get("hrvSummary", {}).get("lastNightAvg"))
-        except Exception:
-            hrv_hist.append(None)
-
-        try:
-            summary = client.get_user_summary(current_date)
-            bb_high = summary.get("bodyBatteryHighestValue") if isinstance(summary, dict) else None
-        
-            if bb_high is None:
-                bb_data = client.get_body_battery(current_date)
-                vals = []
-                if isinstance(bb_data, list):
-                    for entry in bb_data:
-                        if isinstance(entry, dict):
-                            arr = entry.get("bodyBatteryValuesArray") or entry.get("bodyBatteryValues") or []
-                            if isinstance(arr, list):
-                                for pt in arr:
-                                    val = pt[1] if isinstance(pt, (list, tuple)) and len(pt) > 1 else (pt.get("value") if isinstance(pt, dict) else None)
-                                    if val is not None and isinstance(val, (int, float)):
-                                        vals.append(val)
-                            else:
-                                val = entry.get("bodyBatteryLevel") or entry.get("bodyBatteryValue") or entry.get("value")
-                                if val is not None and isinstance(val, (int, float)):
-                                    vals.append(val)
-                bb_high = max(vals) if vals else None
-
-            bb_peak_hist.append(bb_high)
-        except Exception:
-            bb_peak_hist.append(None)
-            
-        try:
-            stats = client.get_user_summary(current_date)
-            rhr_hist.append(stats.get("restingHeartRate"))
-        except Exception:
-            rhr_hist.append(None)
-
-        try:
-            stats = client.get_user_summary(current_date)
-            stress_val = stats.get("averageStressLevel")
-            if stress_val is None or stress_val == -1:
-                stress_data = client.get_stress_data(current_date)
-                stress_val = stress_data.get("averageStressLevel")
-            stress_hist.append(stress_val if isinstance(stress_val, (int, float)) and stress_val >= 0 else None)
-        except Exception:
-            stress_hist.append(None)
-
-        try:
-            resp_data = client.get_respiration_data(current_date)
-            resp_val = resp_data.get("avgWakingRespirationValue") or resp_data.get("avgSleepRespirationValue")
-            if resp_val is None:
-                sleep_raw = client.get_sleep_data(current_date)
-                resp_val = sleep_raw.get("dailySleepDTO", {}).get("averageRespirationValue")
-            resp_hist.append(resp_val)
-        except Exception:
-            resp_hist.append(None)
-
-    today_str = today.strftime("%Y-%m-%d")
-    hrv_status_str = "BALANCED"
-    try:
-        hrv_status_str = client.get_hrv_data(today_str).get("hrvSummary", {}).get("status", "BALANCED")
-    except Exception:
-        pass
-
-    bb_current = None
-    try:
-        summary_today = client.get_user_summary(today_str)
-        if isinstance(summary_today, dict):
-            bb_current = summary_today.get("bodyBatteryMostRecentValue") or summary_today.get("bodyBatteryLevel")
-    except Exception:
-        pass
-
-    training_readiness = "N/A"
-    try:
-        readiness = client.get_training_readiness(today_str)
-        if isinstance(readiness, list) and readiness:
-            item = readiness[0] if isinstance(readiness[0], dict) else readiness[-1]
-            training_readiness = item.get("score") or item.get("scoreValue") or item.get("value", "N/A")
-        elif isinstance(readiness, dict):
-            training_readiness = readiness.get("score") or readiness.get("scoreValue") or readiness.get("value", "N/A")
-    except Exception:
-        pass
-       # --- Puxar Histórico Real da Balança Garmin Index S2 ---
-    today_str = today.strftime("%Y-%m-%d")
-    start_body_date = (today - timedelta(days=30)).strftime("%Y-%m-%d")
-    try:
-        body_comp_raw = client.get_body_composition(start_body_date, today_str)
-        weight_list = body_comp_raw.get("dateWeightList", []) if isinstance(body_comp_raw, dict) else (body_comp_raw if isinstance(body_comp_raw, list) else [])
-        
-        for record in weight_list:
-            if isinstance(record, dict):
-                raw_date = record.get("samplePk") or record.get("date") or record.get("calendarDate")
-                dt_str = str(raw_date)[:10] if raw_date else None
-                
-                w_kg = record.get("weight", 0) / 1000.0 if record.get("weight", 0) > 200 else record.get("weight")
-                fat_pct = record.get("bodyFat")
-                muscle_kg = record.get("muscleMass", 0) / 1000.0 if record.get("muscleMass", 0) > 200 else record.get("muscleMass")
-                water_pct = record.get("bodyWater")
-                bone_kg = record.get("boneMass", 0) / 1000.0 if record.get("boneMass", 0) > 200 else record.get("boneMass")
-                bmi_val = record.get("bmi")
-                
-                if dt_str and w_kg:
-                    body_records.append({
-                        "Data": dt_str,
-                        "Peso (kg)": round(w_kg, 1),
-                        "Gordura Corporal (%)": round(fat_pct, 1) if fat_pct else None,
-                        "Massa Muscular (kg)": round(muscle_kg, 1) if muscle_kg else None,
-                        "Água Corporal (%)": round(water_pct, 1) if water_pct else None,
-                        "Massa Óssea (kg)": round(bone_kg, 1) if bone_kg else None,
-                        "IMC": round(bmi_val, 1) if bmi_val else None
-                    })
-    except Exception:
-        pass
-
-    sleep_rev, hrv_rev, bb_peak_rev = sleep_hist[::-1], hrv_hist[::-1], bb_peak_hist[::-1]
-    rhr_rev, stress_rev, resp_rev = rhr_hist[::-1], stress_hist[::-1], resp_hist[::-1]
-
-    df_history = pd.DataFrame({
-        "Date": dates_list,
-        "HRV / VRC (ms)": hrv_hist,
-        "Sleep / Sono": sleep_hist,
-        "RHR / FC Repouso (bpm)": rhr_hist,
-        "Stress": stress_hist,
-        "Body Battery Peak": bb_peak_hist
-    }).set_index("Date")
-
-    return {
-        "hrv_status": hrv_status_str,
-        "bb_current": bb_current,
-        "training_readiness": training_readiness,
-        "sleep": [sleep_rev[0], calculate_avg(sleep_rev[:3]), calculate_avg(sleep_rev[:7]), calculate_avg(sleep_rev)],
-        "hrv": [hrv_rev[0], calculate_avg(hrv_rev[:3]), calculate_avg(hrv_rev[:7]), calculate_avg(hrv_rev)],
-        "bb_peak": [bb_peak_rev[0], calculate_avg(bb_peak_rev[:3]), calculate_avg(bb_peak_rev[:7]), calculate_avg(bb_peak_rev)],
-        "rhr": [rhr_rev[0], calculate_avg(rhr_rev[:3]), calculate_avg(rhr_rev[:7]), calculate_avg(rhr_rev)],
-        "stress": [stress_rev[0], calculate_avg(stress_rev[:3]), calculate_avg(stress_rev[:7]), calculate_avg(stress_rev)],
-        "resp": [resp_rev[0], calculate_avg(resp_rev[:3]), calculate_avg(resp_rev[:7]), calculate_avg(resp_rev)],
-        "df_history": df_history
-    }
-
 if sync_pressed:
     st.cache_data.clear()
+    st.rerun()
 
-with st.spinner(t["fetching"]):
-    data = fetch_garmin_data()
-
-# --- CARTOES DE TOPO ESTILIZADOS ---
+# --- CARTÕES DE TOPO ESTILIZADOS ---
 st.markdown("""
 <style>
 .metric-card {
@@ -647,7 +654,7 @@ if isinstance(data['rhr'][0], (int, float)) and isinstance(data['rhr'][3], (int,
     fatigue_points += 2
     reasons_keys.append("rhr_high")
 
-if data['bb_current'] < 35:
+if data['bb_current'] is not None and isinstance(data['bb_current'], (int, float)) and data['bb_current'] < 35:
     fatigue_points += 2
     reasons_keys.append("bb_low")
 
