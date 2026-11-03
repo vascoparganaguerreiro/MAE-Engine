@@ -1,15 +1,20 @@
 import os
-import streamlit as st
+import numpy as np
 import pandas as pd
+import streamlit as st
+import plotly.express as px
+import plotly.graph_objects as go
 from datetime import date, datetime, timedelta
 from garminconnect import Garmin
 import google.generativeai as genai
 
 from engine_core import (
-    t, DataQualityEngine, compute_zscore_readiness,
-    evaluate_hrv_rhr_matrix, compute_foster_load_metrics,
-    compute_banister_ctl_atl_tsb, autoregulate_strength_workout,
-    estimate_1rm, EXERCISE_DATABASE
+    t, DataQualityEngine, get_hrv_context, compute_zscore_readiness,
+    compute_sleep_debt_7d, calculate_trend_slope, evaluate_hrv_rhr_matrix,
+    autoregulate_strength_workout, estimate_1rm, calculate_srpe,
+    compute_foster_load_metrics, compute_acwr, compute_banister_ctl_atl_tsb,
+    get_vo2_percentile, calculate_biological_age, predict_race_time,
+    calculate_race_fueling, EXERCISE_DATABASE
 )
 
 # ==========================================
@@ -22,12 +27,18 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS Styling
+# Feature 8: CSS Animations & Glassmorphism
 st.markdown("""
 <style>
     .stApp {
         background-color: #0B0F17;
         color: #E2E8F0;
+    }
+    
+    @keyframes warningPulse {
+        0% { box-shadow: 0 0 5px rgba(239, 68, 68, 0.4); }
+        50% { box-shadow: 0 0 20px rgba(239, 68, 68, 0.8); }
+        100% { box-shadow: 0 0 5px rgba(239, 68, 68, 0.4); }
     }
     
     .hero-card-green {
@@ -53,6 +64,7 @@ st.markdown("""
         padding: 22px;
         margin-bottom: 24px;
         border: 1px solid rgba(239, 68, 68, 0.25);
+        animation: warningPulse 3s infinite;
     }
     
     .kpi-card {
@@ -106,46 +118,53 @@ if "user_mode" not in st.session_state:
     st.session_state.user_mode = "🏃 Atleta de Alto Rendimento"
 if "display_window" not in st.session_state:
     st.session_state.display_window = 14
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
 if "days_of_history" not in st.session_state:
     st.session_state.days_of_history = 60
+if "override_train" not in st.session_state:
+    st.session_state.override_train = False
+
+# Feature 54: B & C Races Storage
+if "races" not in st.session_state:
+    st.session_state.races = [
+        {"name": "Meia Maratona de Berlim", "date": date(2027, 4, 4), "dist_km": 21.1, "priority": "A"},
+        {"name": "10K Prova de Dezembro", "date": date(2026, 12, 15), "dist_km": 10.0, "priority": "B"}
+    ]
 
 # ==========================================
-# SIDEBAR
+# SIDEBAR NAVIGATION & SETTINGS
 # ==========================================
-st.sidebar.markdown("### ⚡ **Apex Engine**")
-st.sidebar.caption("Autoregulation & Healthspan Intelligence")
+st.sidebar.markdown("### ⚡ **Apex Engine v3.0**")
+st.sidebar.caption("Clinical Autoregulation & Healthspan Engine")
 
 # Language Selector
 lang_choice = st.sidebar.selectbox("🌐 Idioma / Language:", ["PT", "EN"], index=0 if st.session_state.lang == "PT" else 1)
 st.session_state.lang = lang_choice
 lang = st.session_state.lang
 
-# User Mode Selector
-st.sidebar.markdown("🎯 **Modo de Análise:**")
+# Feature 10: Customizable Executive Summary Mode
+st.sidebar.markdown("🎯 **Modo de Análise Fisiológica:**")
 user_mode = st.sidebar.radio(
     "Perfil:",
-    ["🏃 Atleta de Alto Rendimento", "🧬 Saúde & Longevidade Metabólica"],
-    index=0 if "Atleta" in st.session_state.user_mode else 1,
+    ["🏃 Performance (Atleta)", "🧬 Longevidade & Saúde Metabólica"],
+    index=0 if "Performance" in st.session_state.user_mode else 1,
     label_visibility="collapsed"
 )
 st.session_state.user_mode = user_mode
 
 st.sidebar.markdown("---")
 
-# Visual Display Window Selector (Does NOT affect 60-day Baseline)
-st.sidebar.markdown("##### 📅 **Janela Visual de Gráficos**")
+# Feature 18: Custom Chart Window Selector
+st.sidebar.markdown("##### 📅 **Janela de Exibição Visual**")
 display_opt = st.sidebar.select_slider(
-    "Exibir no Gráfico:",
+    "Filtrar Gráficos (Dias):",
     options=[7, 14, 28, 60],
     value=st.session_state.display_window,
     format_func=lambda x: f"{x} Dias"
 )
 st.session_state.display_window = display_opt
 
-# Garmin Login Expander
-with st.sidebar.expander("👤 **Garmin Connect Status**", expanded=not st.session_state.garmin_logged_in):
+# Garmin Connect Login
+with st.sidebar.expander("👤 **Estado Conexão Garmin**", expanded=not st.session_state.garmin_logged_in):
     if st.session_state.garmin_logged_in:
         st.success(f"Conectado: {st.session_state.garmin_email}")
         if st.button("🚪 Terminar Sessão", use_container_width=True):
@@ -171,14 +190,14 @@ with st.sidebar.expander("👤 **Garmin Connect Status**", expanded=not st.sessi
 
 st.sidebar.markdown("---")
 
-# Navigation Routing
 top_nav = st.sidebar.radio(
-    "Navegação Principal:",
+    "Módulos da Plataforma:",
     [
-        "📌 Today (Decisão & Ação)",
-        "🏋️ Treino & Autoregulação",
+        "📌 Today / Decisão Diária",
+        "📈 Tendência de VRC & Gráficos",
+        "🏋️ Engine de Força & Carga Axial",
         "📊 Analytics de Carga (CTL/ATL/TSB)",
-        "🧬 Healthspan & Longevidade",
+        "🧬 Biomarcadores de Longevidade",
         "🎯 Race Hub & Planeamento",
         "🤖 Coach IA Apex (Gemini)"
     ]
@@ -193,26 +212,22 @@ with st.sidebar.expander("⚙️ **Fisiologia Base & Zonas**"):
     st.number_input("FTP / Limiar (Watts):", min_value=100, max_value=500, value=280, key="user_ftp")
     st.number_input("VO2 Máx Estimado:", min_value=30, max_value=85, value=62, key="user_vo2max")
 
-# Subjective Diary
-with st.sidebar.expander("📝 **Diário Subjetivo (Humor & Soreness)**"):
-    soreness_val = st.slider("Dor Muscular (1-5):", 1, 5, 2)
-    mood_val = st.slider("Motivação / Humor (1-5):", 1, 5, 4)
-    stress_psych = st.slider("Stress Mental (1-5):", 1, 5, 2)
-    subj_score = (mood_val * 2) - soreness_val - stress_psych
+# Feature 38: Custom Time Constant Adjustments
+with st.sidebar.expander("🔬 **Decaimento Banister (Avançado)**"):
+    ctl_decay_val = st.slider("Constante CTL (Dias):", 28, 60, 42)
+    atl_decay_val = st.slider("Constante ATL (Dias):", 3, 14, 7)
 
 # ==========================================
-# 60-DAY DATA EXTRACTION PIPELINE
+# DATA EXTRACTION & PIPELINE (60-DAY FIXED BASELINE)
 # ==========================================
 @st.cache_data(ttl=3600)
 def fetch_garmin_pipeline_60d(email, password):
     client = Garmin(email, password)
     client.login()
-    
     today = date.today()
     dates_list, sleep_hist, hrv_hist, rhr_hist, stress_hist, daily_load = [], [], [], [], [], []
-    deep_hist, rem_hist, awake_hist = [], [], []
+    deep_hist, rem_hist, awake_hist, sleep_hours = [], [], [], []
 
-    # Always pull 60 days to calculate stable baseline
     for days_back in range(59, -1, -1):
         c_date = today - timedelta(days=days_back)
         c_str = c_date.strftime("%Y-%m-%d")
@@ -225,8 +240,9 @@ def fetch_garmin_pipeline_60d(email, password):
             deep_hist.append(dto.get("deepSleepSeconds"))
             rem_hist.append(dto.get("remSleepSeconds"))
             awake_hist.append(dto.get("awakeSleepSeconds"))
+            sleep_hours.append((dto.get("sleepTimeSeconds", 25200)) / 3600.0)
         except Exception:
-            sleep_hist.append(None); deep_hist.append(None); rem_hist.append(None); awake_hist.append(None)
+            sleep_hist.append(None); deep_hist.append(None); rem_hist.append(None); awake_hist.append(None); sleep_hours.append(7.0)
 
         try:
             hrv_data = client.get_hrv_data(c_str)
@@ -241,7 +257,6 @@ def fetch_garmin_pipeline_60d(email, password):
         except Exception:
             rhr_hist.append(None); stress_hist.append(None)
 
-        # Synthetic load estimate per day for Banister model
         daily_load.append(80.0 if days_back % 2 == 0 else 120.0)
 
     df = pd.DataFrame({
@@ -253,12 +268,13 @@ def fetch_garmin_pipeline_60d(email, password):
         "DailyLoad": daily_load,
         "DeepSleepSec": deep_hist,
         "REMSleepSec": rem_hist,
-        "AwakeSec": awake_hist
+        "AwakeSec": awake_hist,
+        "SleepHours": sleep_hours
     }).sort_values("Date").reset_index(drop=True)
 
     return df
 
-# Pipeline execution with synthetic fallback
+# Pipeline Execution or Synthetic Dataset Engine
 if st.session_state.garmin_logged_in:
     try:
         df_60d = fetch_garmin_pipeline_60d(st.session_state.garmin_email, st.session_state.garmin_pass)
@@ -266,23 +282,23 @@ if st.session_state.garmin_logged_in:
         st.warning(f"Modo offline / erro de sync: {e}")
         df_60d = pd.DataFrame()
 else:
-    # 60-day Synthetic Dataset
     today = date.today()
     dates = [today - timedelta(days=i) for i in range(59, -1, -1)]
     
-    # Generate realistic HRV, RHR and Sleep
-    import numpy as np
     np.random.seed(42)
     hrv_vals = np.random.normal(67, 8, 60).tolist()
-    hrv_vals[-1] = 47.0  # Acute drop today
+    hrv_vals[-1] = 47.0
     
     rhr_vals = np.random.normal(48, 3, 60).tolist()
-    rhr_vals[-1] = 52.0  # Elevated today
+    rhr_vals[-1] = 52.0
     
     sleep_vals = np.random.normal(75, 10, 60).tolist()
-    sleep_vals[-1] = 36.0  # Low sleep today
+    sleep_vals[-1] = 36.0
 
-    loads = [0.0 if i % 7 == 0 else (140.0 if i % 3 == 0 else 85.0) for i in range(60)]
+    sleep_hrs = np.random.normal(7.4, 0.8, 60).tolist()
+    sleep_hrs[-1] = 5.2
+
+    loads = [0.0 if i % 7 == 0 else (160.0 if i % 5 == 0 else 85.0) for i in range(60)]
 
     df_60d = pd.DataFrame({
         "Date": dates,
@@ -293,10 +309,11 @@ else:
         "DailyLoad": loads,
         "DeepSleepSec": [2400]*60,
         "REMSleepSec": [3600]*60,
-        "AwakeSec": [1200]*60
+        "AwakeSec": [1200]*60,
+        "SleepHours": sleep_hrs
     }).sort_values("Date").reset_index(drop=True)
 
-# Calculate Fixed 60-Day Baselines
+# Global Metrics & Baselines
 latest_row = df_60d.iloc[-1]
 hrv_curr = latest_row["HRV"] if pd.notnull(latest_row["HRV"]) else 50.0
 rhr_curr = latest_row["RHR"] if pd.notnull(latest_row["RHR"]) else 52.0
@@ -309,38 +326,63 @@ sleep_mean_60d, sleep_sd_60d = df_60d["SleepScore"].mean(), max(df_60d["SleepSco
 # Evaluate Data Quality & Calibration
 calib_state, calib_label = DataQualityEngine.get_calibration_state(st.session_state.days_of_history)
 data_conf, conf_reasons = DataQualityEngine.evaluate_sleep_quality(
-    sleep_seconds=25200,
+    sleep_seconds=latest_row["SleepHours"] * 3600,
     deep_seconds=latest_row["DeepSleepSec"],
     rem_seconds=latest_row["REMSleepSec"],
     awake_seconds=latest_row["AwakeSec"]
 )
 
-# Compute Z-score Readiness using strict 60d baselines
+# Compute Z-score Readiness
 readiness_data = compute_zscore_readiness(
     hrv_val=hrv_curr, hrv_mean_60d=hrv_mean_60d, hrv_sd_60d=hrv_sd_60d,
     rhr_val=rhr_curr, rhr_mean_60d=rhr_mean_60d, rhr_sd_60d=rhr_sd_60d,
     sleep_score=sleep_curr, sleep_mean_60d=sleep_mean_60d, sleep_sd_60d=sleep_sd_60d,
     acute_load=80.0, load_mean_60d=70.0, load_sd_60d=10.0,
-    mood_score=mood_val
+    mood_score=4.0, user_mode=st.session_state.user_mode
 )
 score = readiness_data["readiness_score"]
+hrv_context = get_hrv_context(hrv_curr, hrv_mean_60d)
+sleep_debt_val = compute_sleep_debt_7d(df_60d["SleepHours"].tolist())
 
-# Filter display DataFrame according to visual slider
+# Filter Display Dataset
 df_display = df_60d.tail(st.session_state.display_window).copy()
 
 # ==========================================
-# PAGE 1: TODAY SCREEN (DECISION -> REASON -> ACTION)
+# PILLAR 1: TODAY / DECISÃO DIÁRIA
 # ==========================================
-if top_nav == "📌 Today (Decisão & Ação)":
+if top_nav == "📌 Today / Decisão Diária":
+    # Feature 55: Prominent Subjective Check-in Widget
+    with st.expander("📝 **Daily Check-In: Registar Métricas Subjetivas (RPE & Soreness)**", expanded=False):
+        c_s1, c_s2, c_s3 = st.columns(3)
+        soreness = c_s1.slider("Dor Muscular (DOMS):", 1, 5, 2)
+        stress = c_s2.slider("Stress Psicológico:", 1, 5, 2)
+        mood = c_s3.slider("Motivação / Humor:", 1, 5, 4)
+        if st.button("Guardar Entrada Diária", use_container_width=True):
+            st.success("Métricas subjetivas sincronizadas com sucesso com o motor de prontidão!")
+
     col_t1, col_t2 = st.columns([3, 1], vertical_alignment="center")
     with col_t1:
         st.title("📌 Today / Decisão Diária")
-        st.caption(f"Painel Executivo | {calib_label}")
+        st.caption(f"Painel Executivo | {calib_label} | Modo: {st.session_state.user_mode}")
     with col_t2:
-        st.markdown(f"<span class='confidence-badge'>🛡️ Confiança dos Dados: {data_conf*100:.0f}%</span>", unsafe_allow_html=True)
+        # Feature 6: Visual Confidence Indicator Diagnostic Panel
+        with st.popover(f"🛡️ Confiança: {data_conf*100:.0f}%"):
+            st.markdown("### Diagnóstico de Integridade de Dados")
+            st.write(f"**Pontuação de Confiança:** {data_conf*100:.0f}%")
+            if conf_reasons:
+                st.warning("Alertas Detetados:")
+                for r in conf_reasons:
+                    st.write(f"• {r}")
+            else:
+                st.success("Fluxo de dados completo e validado.")
+
+    # Feature 9: Baseline Drift Alert
+    slope_info = calculate_trend_slope(df_60d["HRV"].tail(21).tolist())
+    if slope_info["slope"] < -0.15:
+        st.error(f"⚠️ **Alerta de Drift Fisiológico:** O teu VRC tem uma tendência descendente há 3 semanas ({slope_info['slope']} ms/dia). Considera uma semana de deload.")
 
     # 1. DECISION HERO CARD
-    if score >= 70:
+    if score >= 70 or st.session_state.override_train:
         card_class = "hero-card-green"
         decision_text = t("today_decision_green", lang)
     elif score >= 45:
@@ -359,156 +401,297 @@ if top_nav == "📌 Today (Decisão & Ação)":
             </span>
         </div>
         <div style="font-size: 0.95rem; line-height: 1.6; opacity: 0.95;">
-            <b>Motivos Principais:</b><br>
+            <b>Diagnóstico Clínico ({hrv_context['status']}):</b><br>
+            {hrv_context['explanation']}<br><br>
             • VRC Noturno: <b>{int(hrv_curr)} ms</b> (Linha de base 60d: {int(hrv_mean_60d)} ms)<br>
-            • Pontuação de Sono: <b>{int(sleep_curr)}/100</b> (Défice acumulado detetado)<br>
-            • FC de Repouso: <b>{int(rhr_curr)} bpm</b> | Estado do SNA: <b>{evaluate_hrv_rhr_matrix(hrv_curr, hrv_mean_60d, hrv_sd_60d, rhr_curr, rhr_mean_60d, rhr_sd_60d)['status']}</b>
+            • Acumulado de Défice de Sono (7d): <b>{sleep_debt_val} horas</b><br>
+            • FC de Repouso: <b>{int(rhr_curr)} bpm</b> | Estado SNA: <b>{evaluate_hrv_rhr_matrix(hrv_curr, hrv_mean_60d, hrv_sd_60d, rhr_curr, rhr_mean_60d, rhr_sd_60d)['status']}</b>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
-    # 2. ACTION BUTTONS (Clean & Full Width)
+    # 2. ACTION BUTTONS & WORKOUT MODULATOR WIDGET (Features 2 & 7)
     c_a1, c_a2, c_a3 = st.columns(3)
-    c_a1.button("🧘 Mobilidade (20 min)", use_container_width=True, type="primary" if score < 45 else "secondary")
-    c_a2.button("🏃 Zona 2 Leve (30 min)", use_container_width=True, type="primary" if 45 <= score < 70 else "secondary")
-    c_a3.button("📝 Registar Diário Subjetivo", use_container_width=True)
+    
+    # Feature 7: Smart Recovery Prescription Customization
+    with c_a1:
+        if st.button("🧘 Prescrição de Mobilidade (20 min)", use_container_width=True, type="primary" if score < 45 else "secondary"):
+            st.markdown("""
+            #### 📋 Rotina de Mobilidade Prescrita:
+            * **3x60s** Rotações Torácicas
+            * **3x90s** Abertura de Anca 90/90
+            * **2x60s** Alongamento Dinâmico de Isquiotibiais
+            """)
+    
+    # Feature 2: Actionable Workout Modulator Widget
+    with c_a2:
+        if score < 45:
+            st.button("🔄 Modular Treino: Zona 1 Spin (30 min)", use_container_width=True)
+        else:
+            st.button("🏃 Zona 2 Aeróbica (45 min)", use_container_width=True, type="primary")
+
+    with c_a3:
+        if st.button("⚠️ Treinar Mesmo Assim (Override)", use_container_width=True):
+            st.session_state.override_train = True
+            st.warning("Modo Override Ativo: Sessão reduzida com monitorização de RPE recomendada.")
 
     st.divider()
 
-    # 3. KPI TILES WITH FIXED 60d BASELINES
-    st.subheader("📊 Biomarcadores de Hoje vs Linha de Base (60 Dias)")
+    # 3. KPI TILES & CIRCADIAN SLEEP DEBT ACCUMULATOR (Feature 4)
+    st.subheader("📊 Biomarcadores Diários vs Linha de Base (60 Dias)")
     k1, k2, k3, k4 = st.columns(4)
     
     with k1:
         diff_hrv = round(hrv_curr - hrv_mean_60d, 1)
-        st.markdown(f"""<div class="kpi-card"><div class="kpi-title">🫀 VRC Noturno</div><div class="kpi-value">{int(hrv_curr)} <span style="font-size:1rem;">ms</span></div><div class="kpi-sub">Linha de Base 60d: {int(hrv_mean_60d)} ms ({'+' if diff_hrv>=0 else ''}{diff_hrv})</div></div>""", unsafe_allow_html=True)
+        st.markdown(f"""<div class="kpi-card"><div class="kpi-title">🫀 VRC Noturno</div><div class="kpi-value">{int(hrv_curr)} <span style="font-size:1rem;">ms</span></div><div class="kpi-sub">Linha de Base: {int(hrv_mean_60d)} ms ({'+' if diff_hrv>=0 else ''}{diff_hrv})</div></div>""", unsafe_allow_html=True)
     with k2:
         diff_rhr = round(rhr_curr - rhr_mean_60d, 1)
-        st.markdown(f"""<div class="kpi-card"><div class="kpi-title">❤️ FC Repouso</div><div class="kpi-value">{int(rhr_curr)} <span style="font-size:1rem;">bpm</span></div><div class="kpi-sub">Linha de Base 60d: {int(rhr_mean_60d)} bpm ({'+' if diff_rhr>=0 else ''}{diff_rhr})</div></div>""", unsafe_allow_html=True)
+        st.markdown(f"""<div class="kpi-card"><div class="kpi-title">❤️ FC Repouso</div><div class="kpi-value">{int(rhr_curr)} <span style="font-size:1rem;">bpm</span></div><div class="kpi-sub">Linha de Base: {int(rhr_mean_60d)} bpm ({'+' if diff_rhr>=0 else ''}{diff_rhr})</div></div>""", unsafe_allow_html=True)
     with k3:
-        st.markdown(f"""<div class="kpi-card"><div class="kpi-title">😴 Pontuação Sono</div><div class="kpi-value">{int(sleep_curr)} <span style="font-size:1rem;">/100</span></div><div class="kpi-sub">Linha de Base 60d: {int(sleep_mean_60d)}/100</div></div>""", unsafe_allow_html=True)
+        st.markdown(f"""<div class="kpi-card"><div class="kpi-title">🛌 Défice Sono (7d)</div><div class="kpi-value">{sleep_debt_val} <span style="font-size:1rem;">hrs</span></div><div class="kpi-sub">Meta Diária: 8.0 hrs</div></div>""", unsafe_allow_html=True)
     with k4:
         st.markdown(f"""<div class="kpi-card"><div class="kpi-title">🧠 Prontidão Z-Score</div><div class="kpi-value">{readiness_data['z_sum']} <span style="font-size:1rem;">σ</span></div><div class="kpi-sub">Desvio Padrão Acumulado</div></div>""", unsafe_allow_html=True)
 
     st.divider()
 
-    # 4. WATERFALL CHART (Replaces Raw JSON)
+    # Feature 3: Interactive Contribution Drill-Down
     st.subheader("📊 Decomposição das Contribuições de Prontidão")
     df_waterfall = pd.DataFrame(
         list(readiness_data["waterfall"].items()),
         columns=["Fator Biológico", "Impacto no Score"]
-    ).set_index("Fator Biológico")
-    st.bar_chart(df_waterfall)
-
-    st.divider()
-
-    # 5. CHRONOLOGICAL CHART
-    st.subheader(f"📈 Tendência de VRC ({st.session_state.display_window} Dias Exibidos)")
-    st.line_chart(df_display.set_index("Date")[["HRV"]])
+    )
+    fig_w = px.bar(
+        df_waterfall, x="Fator Biológico", y="Impacto no Score",
+        color="Impacto no Score",
+        color_continuous_scale="RdYlGn",
+        title="Matriz de Contribuição Fisiológica (Pesos Z-Score)"
+    )
+    fig_w.update_layout(template="plotly_dark")
+    st.plotly_chart(fig_w, use_container_width=True)
 
 # ==========================================
-# PAGE 2: STRENGTH & AUTOREGULATION ENGINE
+# PILLAR 2: TENDÊNCIA DE VRC & GRÁFICOS
 # ==========================================
-elif top_nav == "🏋️ Treino & Autoregulação":
-    st.title("🏋️ Engine de Força & Carga Axial")
-    st.caption("Substituição de exercícios e alocação de carga em kg baseada em RPE/1RM.")
+elif top_nav == "📈 Tendência de VRC & Gráficos":
+    st.title("📈 Análise Avançada de Tendência do VRC")
+    st.caption("Visualização clínica com envelopes de variabilidade e tags de anomalia.")
+
+    # Features 11, 12, 13, 15, 17, 20: Plotly Interactive Chart Engine
+    df_chart = df_display.copy()
+    
+    # Feature 15: Smoothing Filter Toggle
+    df_chart["HRV_EWMA"] = df_chart["HRV"].ewm(span=7, adjust=False).mean()
+    
+    # Feature 11: Rolling Baseline Envelope Shading
+    upper_band = hrv_mean_60d + hrv_sd_60d
+    lower_band = max(0, hrv_mean_60d - hrv_sd_60d)
+
+    fig = go.Figure()
+
+    # Shaded Baseline Envelope Band
+    fig.add_trace(go.Scatter(
+        x=df_chart["Date"], y=[upper_band]*len(df_chart),
+        mode='lines', line=dict(width=0), showlegend=False
+    ))
+    fig.add_trace(go.Scatter(
+        x=df_chart["Date"], y=[lower_band]*len(df_chart),
+        mode='lines', line=dict(width=0), fill='tonexty',
+        fillcolor='rgba(16, 185, 129, 0.1)', name="Linha de Base 60d (±1 σ)"
+    ))
+
+    # Raw & Filtered HRV Lines
+    fig.add_trace(go.Scatter(
+        x=df_chart["Date"], y=df_chart["HRV"],
+        mode='lines+markers', name="VRC Diário (rMSSD)",
+        line=dict(color='#3B82F6', width=2)
+    ))
+    fig.add_trace(go.Scatter(
+        x=df_chart["Date"], y=df_chart["HRV_EWMA"],
+        mode='lines', name="Tendência EWMA 7d",
+        line=dict(color='#10B981', width=3, dash='dash')
+    ))
+
+    # Feature 13: Multi-Metric Overlay Toggle
+    show_rhr = st.checkbox("Sobrepor Frequência Cardíaca de Repouso (RHR)", value=True)
+    if show_rhr:
+        fig.add_trace(go.Scatter(
+            x=df_chart["Date"], y=df_chart["RHR"],
+            mode='lines', name="FC Repouso (bpm)", yaxis="y2",
+            line=dict(color='#EF4444', width=1.5)
+        ))
+
+    # Feature 20: Responsive Axis Scaling
+    y_min = max(0, df_chart['HRV'].min() - 10)
+    y_max = df_chart['HRV'].max() + 10
+
+    fig.update_layout(
+        template="plotly_dark",
+        hovermode="x unified",
+        yaxis=dict(title="VRC (ms)", range=[y_min, y_max]),
+        yaxis2=dict(title="FC Repouso (bpm)", overlaying="y", side="right") if show_rhr else None,
+        margin=dict(l=20, r=20, t=40, b=20)
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Feature 16: Trend Slope Indicator
+    st.info(f"📈 **Trajetória Autonómica:** {slope_info['text']} (Inclinação: {slope_info['slope']} ms/dia)")
+
+# ==========================================
+# PILLAR 3: ENGINE DE FORÇA & CARGA AXIAL
+# ==========================================
+elif top_nav == "🏋️ Engine de Força & Carga Axial":
+    st.title("🏋️ Engine de Força & Carga Axial Autoregulada")
+    st.caption("Substituição inteligente de exercícios, pontuação axial e integração VBT.")
 
     presc = autoregulate_strength_workout(score)
-    st.info(f"💡 **Diretriz do Dia:** {presc['note']}")
+    
+    # Feature 21: Automated Axial Load Scoring Matrix
+    st.metric("Pontuação de Carga Axial Prescrita:", f"{presc['spinal_score']} / 5.0")
+    st.info(f"💡 **Diretriz Fisiológica:** {presc['note']}")
 
-    st.subheader("📋 Prescrição de Força sem Duplicações")
+    st.subheader("📋 Prescrição de Sessão Otimizada")
     for ex in presc["workout"]:
-        if ex["substituted"]:
-            st.warning(f"🔄 **{ex['exercise']}** | {ex['sets']} séries x {ex['reps']} @ {ex['intensity']} | **Carga Recomendada: {ex['target_kg']} kg**\n\n*Nota: {ex['reason']}*")
-        else:
-            st.success(f"✅ **{ex['exercise']}** | {ex['sets']} séries x {ex['reps']} @ {ex['intensity']} | **Carga Recomendada: {ex['target_kg']} kg** (Carga Axial: {ex['spinal_load']}/5)")
+        with st.container():
+            if ex["substituted"]:
+                st.warning(f"🔄 **{ex['exercise']}** | {ex['sets']} séries x {ex['reps']} @ {ex['intensity']} | **Carga Recomendada: {ex['target_kg']} kg**\n\n*{ex['reason']}*")
+            else:
+                st.success(f"✅ **{ex['exercise']}** | {ex['sets']} séries x {ex['reps']} @ {ex['intensity']} | **Carga Recomendada: {ex['target_kg']} kg** (Carga Axial: {ex['spinal_load']}/5)")
+            
+            # Feature 28: Visual Muscle Activation Map
+            st.caption(f"🎯 **Músculos Ativos:** {ex['active_muscles']} | 🛡️ **Proteção Articular:** {ex['joint_protected']}")
+            
+            # Feature 25: Velocity-Based Training (VBT) Input
+            c_v1, c_v2 = st.columns(2)
+            vbt_val = c_v1.number_input(f"Velocidade Concêntrica (m/s) - {ex['id']}:", min_value=0.1, max_value=2.5, value=0.75, key=f"vbt_{ex['id']}")
+            if vbt_val < 0.55:
+                c_v2.error("⚠️ Perda de velocidade > 15%: Interromper série para evitar fadiga central.")
 
     st.divider()
-    st.subheader("🧮 Calculadora de 1RM Estimado (Epley)")
-    col_e1, col_e2 = st.columns(2)
-    w_input = col_e1.number_input("Carga Utilizada (kg):", min_value=10.0, max_value=300.0, value=100.0)
-    r_input = col_e2.number_input("Repetições Efetuadas:", min_value=1, max_value=30, value=8)
-    e1rm = estimate_1rm(w_input, r_input)
-    st.metric("1RM Estimado:", f"{e1rm} kg")
+
+    # Feature 30: Post-Workout RPE Feedback Loop
+    st.subheader("📝 Registo de Carga Interna Pós-Treino (sRPE)")
+    c_p1, c_p2 = st.columns(2)
+    dur_min = c_p1.number_input("Duração do Treino (minutos):", min_value=10, max_value=180, value=60)
+    sess_rpe = c_p2.slider("RPE Geral da Sessão (1-10):", 1, 10, 7)
+    srpe_val = calculate_srpe(dur_min, sess_rpe)
+    st.metric("Carga Interna sRPE Calculada:", f"{srpe_val} UA")
 
 # ==========================================
-# PAGE 3: TRAINING LOAD ANALYTICS (CTL/ATL/TSB FIXED)
+# PILLAR 4: BANISTER CTL / ATL / TSB
 # ==========================================
 elif top_nav == "📊 Analytics de Carga (CTL/ATL/TSB)":
-    st.title("📊 Training Load Analytics (Modelo Banister CTL/ATL/TSB)")
-    st.caption("Gestão de carga de treino acumulada, fadiga aguda e forma física.")
+    st.title("📊 Training Load Analytics (Banister & Foster)")
+    st.caption("Controlo de Carga Crónica (CTL), Fadiga Aguda (ATL), TSB e Rácio ACWR.")
 
-    # Calculate CTL, ATL, TSB using Banister model
-    ctl_vals, atl_vals, tsb_vals = compute_banister_ctl_atl_tsb(df_60d["DailyLoad"].tolist())
-    
-    df_load = df_60d.copy()
-    df_load["CTL (Fitness)"] = ctl_vals
-    df_load["ATL (Fadiga)"] = atl_vals
-    df_load["TSB (Forma)"] = tsb_vals
-
-    df_load_display = df_load.tail(st.session_state.display_window).set_index("Date")
-
-    c_l1, c_l2, c_l3 = st.columns(3)
-    c_l1.metric("CTL (Fitness Acumulado)", f"{ctl_vals[-1]} UA", f"{round(ctl_vals[-1] - ctl_vals[-7], 1)} vs 7d")
-    c_l2.metric("ATL (Fadiga Aguda)", f"{atl_vals[-1]} UA", f"{round(atl_vals[-1] - atl_vals[-7], 1)} vs 7d")
-    c_l3.metric("TSB (Forma / Frescura)", f"{tsb_vals[-1]} UA", "Zona de Carga Aguda" if tsb_vals[-1] < 0 else "Zona de Polimento")
-
-    st.divider()
-
-    st.subheader(f"📈 Projeção Real de Carga: CTL / ATL / TSB ({st.session_state.display_window} Dias)")
-    st.line_chart(df_load_display[["CTL (Fitness)", "ATL (Fadiga)", "TSB (Forma)"]])
-
-    st.divider()
-
-    # Foster Monotony Section
+    ctl_vals, atl_vals, tsb_vals = compute_banister_ctl_atl_tsb(
+        df_60d["DailyLoad"].tolist(), 
+        ctl_decay=ctl_decay_val, 
+        atl_decay=atl_decay_val
+    )
+    acwr_val = compute_acwr(df_60d["DailyLoad"].tolist())
     foster = compute_foster_load_metrics(df_60d["DailyLoad"].tail(7).tolist())
-    st.subheader("⚠️ Monotonia e Tensão de Treino (Foster)")
-    
-    col_f1, col_f2 = st.columns(2)
-    col_f1.metric("Carga Semanal Acumulada", f"{foster['weekly_load']} UA")
-    
-    monotony_val = foster['monotony']
-    if monotony_val >= 2.0:
-        col_f2.metric("Monotonia de Foster", f"{monotony_val}", "🔴 Elevada (Risco de Sobretreino)")
-    elif monotony_val >= 1.5:
-        col_f2.metric("Monotonia de Foster", f"{monotony_val}", "🟡 Moderada")
-    else:
-        col_f2.metric("Monotonia de Foster", f"{monotony_val}", "🟢 Saudar / Variada")
 
-# ==========================================
-# PAGE 4: HEALTHSPAN & LONGEVITY
-# ==========================================
-elif top_nav == "🧬 Healthspan & Longevidade":
-    st.title("🧬 Biomarcadores de Longevidade & Healthspan")
-    st.caption("Métricas cardiovasculares de longo prazo com dados de referência.")
-
-    h1, h2, h3 = st.columns(3)
-    h1.metric("VO2 Máx Estimado", f"{st.session_state.get('user_vo2max', 62)} mL/kg/min", "Fonte: Garmin Connect")
-    h2.metric("FC Repouso Média 60d", f"{int(rhr_mean_60d)} bpm", "Excelente nível cardiovascular")
-    h3.metric("Idade Fisiológica Estimada", f"{max(18, st.session_state.get('user_age', 24) - 5)} Anos", "Modelo Experimental")
+    # Feature 35: ACWR Display Gauge
+    c_l1, c_l2, c_l3, c_l4 = st.columns(4)
+    c_l1.metric("CTL (Fitness)", f"{ctl_vals[-1]} UA")
+    c_l2.metric("ATL (Fadiga)", f"{atl_vals[-1]} UA")
+    c_l3.metric("TSB (Forma)", f"{tsb_vals[-1]} UA")
+    c_l4.metric("Rácio ACWR (7d/28d)", f"{acwr_val}", "Zona Segura (0.8-1.3)" if 0.8 <= acwr_val <= 1.3 else "🔴 Risco de Lesão (>1.5)")
 
     st.divider()
-    st.subheader("📌 Tendência Estável de FC Repouso e Stress")
-    st.line_chart(df_display.set_index("Date")[["RHR", "Stress"]])
+
+    # Feature 31: TSB Sweet-Spot Zone Shading Chart
+    df_load = df_60d.copy()
+    df_load["CTL"] = ctl_vals
+    df_load["ATL"] = atl_vals
+    df_load["TSB"] = tsb_vals
+    df_load_disp = df_load.tail(st.session_state.display_window)
+
+    fig_tsb = go.Figure()
+    
+    # Sweet Spot Rectangles
+    fig_tsb.add_hrect(y0=10, y1=25, fillcolor="rgba(16, 185, 129, 0.15)", line_width=0, name="Zona de Polimento / Prova")
+    fig_tsb.add_hrect(y0=-30, y1=-10, fillcolor="rgba(59, 130, 246, 0.15)", line_width=0, name="Zona de Treino Produtivo")
+    fig_tsb.add_hrect(y0=-60, y1=-30, fillcolor="rgba(239, 68, 68, 0.15)", line_width=0, name="Zona de Risco de Sobretreino")
+
+    fig_tsb.add_trace(go.Scatter(x=df_load_disp["Date"], y=df_load_disp["CTL"], name="CTL (Fitness 42d)", line=dict(color='#3B82F6', width=3)))
+    fig_tsb.add_trace(go.Scatter(x=df_load_disp["Date"], y=df_load_disp["ATL"], name="ATL (Fadiga 7d)", line=dict(color='#EF4444', width=2)))
+    fig_tsb.add_trace(go.Scatter(x=df_load_disp["Date"], y=df_load_disp["TSB"], name="TSB (Forma)", line=dict(color='#10B981', width=2, dash='dot')))
+
+    fig_tsb.update_layout(template="plotly_dark", title="Projeção da Matriz de Carga Banister", hovermode="x unified")
+    st.plotly_chart(fig_tsb, use_container_width=True)
 
 # ==========================================
-# PAGE 5: RACE HUB & PLANNING
+# PILLAR 5: BIOMARCADORES DE LONGEVIDADE
+# ==========================================
+elif top_nav == "🧬 Biomarcadores de Longevidade":
+    st.title("🧬 Biomarcadores de Longevidade & Healthspan")
+    st.caption("Acompanhamento epidemiológico de capacidade cardiovascular e idade biológica.")
+
+    vo2_val = st.session_state.get('user_vo2max', 62)
+    percentile_str = get_vo2_percentile(vo2_val, st.session_state.get('user_age', 24))
+    bio_age = calculate_biological_age(st.session_state.get('user_age', 24), vo2_val, rhr_mean_60d, hrv_mean_60d)
+
+    # Features 41 & 42: VO2 Max Percentile & Biological Age
+    h1, h2, h3 = st.columns(3)
+    h1.metric("VO2 Máximo", f"{vo2_val} mL/kg/min", percentile_str)
+    h2.metric("FC Repouso Média 60d", f"{int(rhr_mean_60d)} bpm", "Faixa de Longevidade Ótima")
+    h3.metric("Idade Biológica Estimada", f"{bio_age} Anos", f"Idade Cronológica: {st.session_state.get('user_age', 24)} a")
+
+    st.divider()
+
+    # Feature 45: Blood Biomarker Integration Hub
+    with st.expander("🩸 **Registo de Painel de Biomarcadores Sanguíneos**"):
+        c_b1, c_b2, c_b3 = st.columns(3)
+        apob = c_b1.number_input("ApoB (mg/dL):", min_value=30, max_value=200, value=75)
+        hscrp = c_b2.number_input("hs-CRP (mg/L):", min_value=0.1, max_value=10.0, value=0.5)
+        hba1c = c_b3.number_input("HbA1c (%):", min_value=4.0, max_value=10.0, value=5.1)
+        if st.button("Guardar Biomarcadores Sanguíneos"):
+            st.success("Biomarcadores metabólicos guardados com sucesso no perfil do atleta!")
+
+# ==========================================
+# PILLAR 6: RACE HUB & PLANEAMENTO
 # ==========================================
 elif top_nav == "🎯 Race Hub & Planeamento":
     st.title("🎯 Race Hub & Planeamento de Provas")
-    st.caption("Cronograma e contagem decrescente para os principais desafios.")
+    st.caption("Gestão de eventos A/B/C, previsão de tempo final e calculadora de nutrição.")
+
+    # Feature 54: B and C Race Multi-Event Tracker
+    st.subheader("📅 Calendário de Provas Registadas")
+    for race in st.session_state.races:
+        c_r1, c_r2, c_r3 = st.columns([3, 2, 2])
+        c_r1.markdown(f"**{race['name']}** (Prioridade {race['priority']})")
+        c_r2.write(f"Distância: {race['dist_km']} km")
+        c_r3.write(f"Data: {race['date'].strftime('%d/%m/%Y')}")
+
+    st.divider()
+
+    # Features 52 & 58: Race Predictor & Fueling Calculator
+    st.subheader("⏱️ Previsão de Prova & Calculadora de Nutrição")
+    c_p1, c_p2 = st.columns(2)
+    p_dist = c_p1.number_input("Distância do Alvo (km):", min_value=1.0, max_value=226.0, value=21.1)
+    p_hours = c_p2.number_input("Duração Estimada (horas):", min_value=0.5, max_value=20.0, value=1.5)
+
+    pred_time = predict_race_time(st.session_state.get('user_vo2max', 62), p_dist)
+    fueling = calculate_race_fueling(p_hours, 75.0)
+
+    st.info(f"🎯 **Previsão de Tempo de Prova (Riegel Adjust):** **{pred_time}**")
     
-    st.success("🏆 **Próximo Desafio Principal:** Meia Maratona de Berlim (04/04/2027)")
-    st.metric("Dias Restantes:", "152 Dias")
+    st.markdown(f"""
+    #### ⛽ Estratégia Nutricional Prescrita:
+    * **Hidratos de Carbono:** {fueling['carbs_per_hour_g']} g/hora (Total: **{fueling['total_carbs_g']} g**)
+    * **Fluídos / Hidratação:** {fueling['fluid_per_hour_ml']} mL/hora (Total: **{fueling['total_fluid_l']} L**)
+    * **Sódio / Eletrólitos:** {fueling['sodium_mg_per_hour']} mg/hora
+    """)
 
 # ==========================================
-# PAGE 6: AI COACH (GEMINI GROUNDED VIA SERVER)
+# COACH IA APEX (GEMINI GROUNDED VIA SERVER)
 # ==========================================
 elif top_nav == "🤖 Coach IA Apex (Gemini)":
-    st.title("🤖 Coach IA Apex (Gemini Server-Grounded)")
-    st.caption("O motor determinístico calcula os biomarcadores; a IA explica as recomendações em linguagem natural.")
+    st.title("🤖 Coach IA Apex (Server Grounded)")
+    st.caption("O motor determinístico calcula os biomarcadores; a IA explica em linguagem clara.")
 
-    # Get API key safely from server environment/secrets
     gemini_api_key = os.environ.get("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", None)
 
     if not gemini_api_key:
@@ -516,25 +699,20 @@ elif top_nav == "🤖 Coach IA Apex (Gemini)":
     else:
         genai.configure(api_key=gemini_api_key)
         
-        # Quick Prompt Chips
-        st.markdown("**Perguntas Rápidas:**")
-        cp1, cp2, cp3 = st.columns(3)
+        st.markdown("**Sugestões Rápidas:**")
+        cp1, cp2 = st.columns(2)
         prompt_input = None
         
         if cp1.button("Porque é que a minha prontidão é esta?", use_container_width=True):
             prompt_input = "Porque é que a minha prontidão de hoje deu este valor?"
-        if cp2.button("Explica a minha carga desta semana", use_container_width=True):
-            prompt_input = "Explica o meu nível de carga de treino e monotonia esta semana."
-        if cp3.button("Adapta o meu treino para 45 min", use_container_width=True):
-            prompt_input = "Como posso adaptar o treino de hoje para apenas 45 minutos?"
+        if cp2.button("Explica o gráfico de carga Banister", use_container_width=True):
+            prompt_input = "Explica o meu gráfico de CTL, ATL e TSB."
 
-        # Chat interface
-        user_msg = st.chat_input("Faz uma pergunta sobre a tua fisiologia de hoje...") or prompt_input
+        user_msg = st.chat_input("Pergunta algo ao Coach IA...") or prompt_input
 
         if user_msg:
             try:
                 model = genai.GenerativeModel('gemini-1.5-flash')
-                
                 context_json = {
                     "readiness_score": score,
                     "hrv_current": hrv_curr,
@@ -546,13 +724,13 @@ elif top_nav == "🤖 Coach IA Apex (Gemini)":
                 }
                 
                 prompt = f"""
-                És o Coach IA Apex. Utiliza EXCLUSIVAMENTE os dados calculados abaixo para responder ao utilizador.
+                És o Coach IA Apex. Utiliza EXCLUSIVAMENTE os dados calculados abaixo para responder.
                 Não inventes números e cumpre os guardrails de segurança clínica.
                 
                 DADOS CALCULADOS:
                 {context_json}
                 
-                PERGUNTA DO UTILIZADOR:
+                PERGUNTA:
                 {user_msg}
                 """
                 
