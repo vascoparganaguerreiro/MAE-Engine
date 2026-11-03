@@ -218,17 +218,58 @@ if page == "😴 Sono & Recuperação Avançada":
 # PÁGINA 4: COMPOSIÇÃO CORPORAL & PESO
 # ==========================================
 if page == "⚖️ Composição Corporal & Peso":
-    st.title("⚖️ Composição Corporal & Peso")
-    st.markdown("Monitorização de peso e bioimpedância sincronizada com a Garmin Index S2.")
+    st.title("⚖️ Composição Corporal & Peso (Garmin Index S2)")
+    st.markdown("Acompanhamento interativo da bioimpedância e tendências de composição corporal.")
     
+    # 1. Dados Reais Sincronizados da Balança Garmin
+    # Estrutura histórica para alimentação direta ou via API
+    body_data = pd.DataFrame({
+        "Data": ["01/11", "02/11"],
+        "Peso (kg)": [79.3, 78.7],
+        "Gordura Corporal (%)": [13.0, 13.6],
+        "Massa Muscular (kg)": [34.8, 34.7],
+        "Água Corporal (%)": [63.5, 63.1],
+        "Massa Óssea (kg)": [6.0, 5.9],
+        "IMC": [23.2, 23.0]
+    }).set_index("Data")
+
+    latest = body_data.iloc[-1]
+    prev = body_data.iloc[-2]
+
+    # Cartões de Resumo com Métricas Reais
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Peso Atual", "78.5 kg", "-0.3 kg")
-    c2.metric("% Gordura Corporal", "12.4%", "-0.1%")
-    c3.metric("Massa Magra", "65.2 kg", "+0.1 kg")
-    c4.metric("Água Corporal", "61.2%", "Ideal")
+    c1.metric("Peso Atual", f"{latest['Peso (kg)']} kg", f"{round(latest['Peso (kg)'] - prev['Peso (kg)'], 1)} kg")
+    c2.metric("% Gordura", f"{latest['Gordura Corporal (%)']}%", f"{round(latest['Gordura Corporal (%)'] - prev['Gordura Corporal (%)'], 1)}%")
+    c3.metric("Massa Muscular", f"{latest['Massa Muscular (kg)']} kg", f"{round(latest['Massa Muscular (kg)'] - prev['Massa Muscular (kg)'], 1)} kg")
+    c4.metric("Água Corporal", f"{latest['Água Corporal (%)']}%", f"{round(latest['Água Corporal (%)'] - prev['Água Corporal (%)'], 1)}%")
+
+    st.divider()
+
+    # 2. Seletor de Métricas Personalizado (Gráfico Estilo Garmin)
+    st.subheader("📈 Análise de Tendências Personalizada")
+    st.caption("Seleciona uma ou mais métricas para cruzar no mesmo gráfico (ex: Massa Muscular + % Gordura).")
+
+    available_metrics = list(body_data.columns)
     
-    st.info("💡 As curvas de tendência de peso e percentagem de gordura serão renderizadas aqui.")
+    selected_metrics = st.multiselect(
+        "Métricas a exibir no gráfico:",
+        options=available_metrics,
+        default=["Gordura Corporal (%)", "Massa Muscular (kg)"]
+    )
+
+    if selected_metrics:
+        st.line_chart(body_data[selected_metrics])
+    else:
+        st.warning("Selecione pelo menos uma métrica para exibir o gráfico.")
+
+    st.divider()
+
+    # 3. Tabela Histórica Completa de Bioimpedância
+    st.subheader("📋 Histórico Registado da Balança Index S2")
+    st.dataframe(body_data, use_container_width=True)
+
     st.stop()
+
 
 # ==========================================
 # PÁGINA 5: HISTÓRICO DE TREINOS & ANÁLISE
