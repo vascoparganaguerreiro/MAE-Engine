@@ -103,11 +103,7 @@ TEXTS = {
 }
 
 t = TEXTS[lang]
-# ==========================================
-# PÁGINA 1: DASHBOARD FISIOLÓGICO DA GARMIN
-# ==========================================
-if page != "📊 Dashboard Fisiológico":
-    pass
+
 # ==========================================
 # PÁGINA 2: GOALS & EVENTOS DEDICADA
 # ==========================================
@@ -144,7 +140,6 @@ if page == "🎯 Goals & Eventos":
         hours_left = max(0, delta.seconds // 3600)
         minutes_left = max(0, (delta.seconds % 3600) // 60)
 
-        # Cartão Destaque Gigante do Próximo Evento (com Minutos)
         st.markdown(f"""
         <div style="background: linear-gradient(135deg, #1E222B 0%, #111827 100%); border-radius: 16px; padding: 26px; border: 2px solid #10B981; margin-bottom: 24px; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.3);">
             <div style="color: #10B981; font-size: 0.85rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em;">PRÓXIMO DESAFIO PRINCIPAL</div>
@@ -167,7 +162,6 @@ if page == "🎯 Goals & Eventos":
         </div>
         """, unsafe_allow_html=True)
 
-    # Lista Cronológica de Eventos Futuros (com Dias, Horas e Minutos)
     st.subheader("📅 Cronograma Completo de Provas")
     for ev in sorted_events:
         event_dt = datetime.combine(ev["date"], datetime.min.time())
@@ -182,7 +176,7 @@ if page == "🎯 Goals & Eventos":
         col_d.caption(f"🗓️ {ev['date'].strftime('%d/%m/%Y')}")
         col_t.markdown(f"⏱️ **{d_left}d {h_left}h {m_left}m restantes**")
         st.divider()
-    # Painel para Adicionar/Editar Eventos (Até 15)
+
     with st.expander("⚙️ Gerir Lista de Eventos (Adicionar / Eliminar)"):
         if len(st.session_state.user_events) < 15:
             if st.button("➕ Adicionar Novo Evento", use_container_width=True):
@@ -201,8 +195,66 @@ if page == "🎯 Goals & Eventos":
             for idx in sorted(events_to_remove, reverse=True):
                 st.session_state.user_events.pop(idx)
             st.rerun()
+            
     st.stop()
 
+# ==========================================
+# PÁGINA 3: SONO & RECUPERAÇÃO AVANÇADA
+# ==========================================
+if page == "😴 Sono & Recuperação Avançada":
+    st.title("😴 Sono & Recuperação Avançada")
+    st.markdown("Análise da arquitetura do sono (REM, Profundo, Leve) e métricas noturnas da Garmin.")
+    
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Sono Total", "7h 45m", "+12m vs média")
+    c2.metric("Sono Profundo", "1h 20m", "17%")
+    c3.metric("Sono REM", "1h 50m", "24%")
+    c4.metric("Pontuação de Sono", "82/100", "Bom")
+    
+    st.info("💡 A integração detalhada da arquitetura de sono via Garmin Connect será renderizada aqui.")
+    st.stop()
+
+# ==========================================
+# PÁGINA 4: COMPOSIÇÃO CORPORAL & PESO
+# ==========================================
+if page == "⚖️ Composição Corporal & Peso":
+    st.title("⚖️ Composição Corporal & Peso")
+    st.markdown("Monitorização de peso e bioimpedância sincronizada com a Garmin Index S2.")
+    
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Peso Atual", "78.5 kg", "-0.3 kg")
+    c2.metric("% Gordura Corporal", "12.4%", "-0.1%")
+    c3.metric("Massa Magra", "65.2 kg", "+0.1 kg")
+    c4.metric("Água Corporal", "61.2%", "Ideal")
+    
+    st.info("💡 As curvas de tendência de peso e percentagem de gordura serão renderizadas aqui.")
+    st.stop()
+
+# ==========================================
+# PÁGINA 5: HISTÓRICO DE TREINOS & ANÁLISE
+# ==========================================
+if page == "📜 Histórico de Treinos & Análise":
+    st.title("📜 Histórico de Treinos & Análise de Provas")
+    st.markdown("Filtra e analisa as tuas sessões passadas por modalidade e janela temporal.")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        start_d = st.date_input("Data Inicial", value=date.today() - timedelta(days=30))
+    with col2:
+        end_d = st.date_input("Data Final", value=date.today())
+        
+    sport_filter = st.multiselect(
+        "Filtrar por Modalidade:",
+        ["Corrida", "Ciclismo", "Natação", "Musculação / Ginásio"],
+        default=["Corrida", "Ciclismo", "Natação", "Musculação / Ginásio"]
+    )
+    
+    st.info("💡 A tabela filtrada com parciais e volume acumulado de treino será renderizada aqui.")
+    st.stop()
+
+# ==========================================
+# PÁGINA 1: DASHBOARD FISIOLÓGICO DA GARMIN (PADRÃO)
+# ==========================================
 
 # --- CABEÇALHO PREMIUM ---
 st.markdown("""
@@ -294,27 +346,22 @@ def fetch_garmin_data():
             hrv_hist.append(None)
 
         try:
-           # 1. Tenta extrair o pico direto do resumo diário da Garmin
             summary = client.get_user_summary(current_date)
             bb_high = summary.get("bodyBatteryHighestValue") if isinstance(summary, dict) else None
         
-            # 2. Se não encontrou no summary, varre os arrays do dia
             if bb_high is None:
                 bb_data = client.get_body_battery(current_date)
                 vals = []
                 if isinstance(bb_data, list):
                     for entry in bb_data:
                         if isinstance(entry, dict):
-                            # A Garmin costuma aninhar os pontos dentro de bodyBatteryValuesArray
                             arr = entry.get("bodyBatteryValuesArray") or entry.get("bodyBatteryValues") or []
                             if isinstance(arr, list):
                                 for pt in arr:
-                                    # pt costuma ser [timestamp, val] ou um dict com o valor
                                     val = pt[1] if isinstance(pt, (list, tuple)) and len(pt) > 1 else (pt.get("value") if isinstance(pt, dict) else None)
                                     if val is not None and isinstance(val, (int, float)):
                                         vals.append(val)
                             else:
-                                # Caso os pontos estejam na raiz do dicionário
                                 val = entry.get("bodyBatteryLevel") or entry.get("bodyBatteryValue") or entry.get("value")
                                 if val is not None and isinstance(val, (int, float)):
                                     vals.append(val)
@@ -699,57 +746,4 @@ elif "Brick" in category:
     st.info("🧱 **Sessão Transição (Ciclismo + Corrida)**")
     bike_t = int(avail_time * 0.7)
     run_t = int(avail_time * 0.3)
-# ==========================================
-# PÁGINA 3: SONO & RECUPERAÇÃO AVANÇADA
-# ==========================================
-if page == "😴 Sono & Recuperação Avançada":
-    st.title("😴 Sono & Recuperação Avançada")
-    st.markdown("Análise da arquitetura do sono (REM, Profundo, Leve) e métricas noturnas da Garmin.")
-    
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Sono Total", "7h 45m", "+12m vs média")
-    c2.metric("Sono Profundo", "1h 20m", "17%")
-    c3.metric("Sono REM", "1h 50m", "24%")
-    c4.metric("Pontuação de Sono", "82/100", "Bom")
-    
-    st.info("💡 A integração detalhada da arquitetura de sono via Garmin Connect será renderizada aqui.")
-    st.stop()
-
-# ==========================================
-# PÁGINA 4: COMPOSIÇÃO CORPORAL & PESO
-# ==========================================
-if page == "⚖️ Composição Corporal & Peso":
-    st.title("⚖️ Composição Corporal & Peso")
-    st.markdown("Monitorização de peso e bioimpedância sincronizada com a Garmin Index S2.")
-    
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Peso Atual", "78.5 kg", "-0.3 kg")
-    c2.metric("% Gordura Corporal", "12.4%", "-0.1%")
-    c3.metric("Massa Magra", "65.2 kg", "+0.1 kg")
-    c4.metric("Água Corporal", "61.2%", "Ideal")
-    
-    st.info("💡 As curvas de tendência de peso e percentagem de gordura serão renderizadas aqui.")
-    st.stop()
-
-# ==========================================
-# PÁGINA 5: HISTÓRICO DE TREINOS & ANÁLISE
-# ==========================================
-if page == "📜 Histórico de Treinos & Análise":
-    st.title("📜 Histórico de Treinos & Análise de Provas")
-    st.markdown("Filtra e analisa as tuas sessões passadas por modalidade e janela temporal.")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        start_d = st.date_input("Data Inicial", value=date.today() - timedelta(days=30))
-    with col2:
-        end_d = st.date_input("Data Final", value=date.today())
-        
-    sport_filter = st.multiselect(
-        "Filtrar por Modalidade:",
-        ["Corrida", "Ciclismo", "Natação", "Musculação / Ginásio"],
-        default=["Corrida", "Ciclismo", "Natação", "Musculação / Ginásio"]
-    )
-    
-    st.info("💡 A tabela filtrada com parciais e volume acumulado de treino será renderizada aqui.")
-    st.stop()
     st.success(f"• **Sessão:** {bike_t} min Ciclismo Z2/Z3 ➔ Transição (T2) ➔ {run_t} min Corrida Z2.")
