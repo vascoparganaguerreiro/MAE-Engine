@@ -1,5 +1,7 @@
 streamlit
 pandas
+numpy
+plotly
 garminconnect
 google-generativeai
 pytest
