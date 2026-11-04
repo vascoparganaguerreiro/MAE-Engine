@@ -1,7 +1,7 @@
-streamlit
-pandas
-numpy
-plotly
-garminconnect
-google-generativeai
-pytest
+streamlit>=1.36
+pandas>=2.1
+numpy>=1.26
+plotly>=5.22
+garminconnect>=0.3.0
+google-genai>=1.0
+pytest>=8.0
