@@ -37,8 +37,24 @@ st.markdown("""
     .timer-number { font-size: 2.8rem; font-weight: 900; color: #3B82F6; font-family: 'Courier New', monospace; text-shadow: 0 0 12px rgba(59, 130, 246, 0.5); }
     .timer-label { font-size: 0.75rem; text-transform: uppercase; color: #94A3B8; font-weight: 700; }
     
-    .status-badge-green { background: rgba(16, 185, 129, 0.2); color: #10B981; border: 1px solid rgba(16, 185, 129, 0.4); padding: 6px 14px; border-radius: 20px; font-weight: 800; font-size: 0.85rem; }
-    .status-badge-amber { background: rgba(245, 158, 11, 0.2); color: #F59E0B; border: 1px solid rgba(245, 158, 11, 0.4); padding: 6px 14px; border-radius: 20px; font-weight: 800; font-size: 0.85rem; }
+    .status-badge-green { background: rgba(16, 185, 129, 0.15); color: #10B981; border: 1px solid rgba(16, 185, 129, 0.4); padding: 7px 16px; border-radius: 20px; font-weight: 800; font-size: 0.85rem; display: inline-block; }
+    .status-badge-amber { background: rgba(245, 158, 11, 0.15); color: #F59E0B; border: 1px solid rgba(245, 158, 11, 0.4); padding: 7px 16px; border-radius: 20px; font-weight: 800; font-size: 0.85rem; display: inline-block; }
+    
+    /* Executive Quick Sync Button Styling */
+    div.stButton > button[key="quick_garmin_sync"] {
+        background: linear-gradient(135deg, #0EA5E9 0%, #2563EB 100%) !important;
+        color: #FFFFFF !important;
+        font-weight: 800 !important;
+        border-radius: 20px !important;
+        border: 1px solid rgba(255, 255, 255, 0.2) !important;
+        padding: 6px 18px !important;
+        box-shadow: 0 4px 14px rgba(37, 99, 235, 0.35) !important;
+        transition: all 0.2s ease-in-out !important;
+    }
+    div.stButton > button[key="quick_garmin_sync"]:hover {
+        transform: translateY(-1px) !important;
+        box-shadow: 0 6px 18px rgba(37, 99, 235, 0.5) !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -207,15 +223,28 @@ if top_nav == "📌 Today / Decisão Diária":
         c_s3.slider("Motivação / Humor:", 1, 5, 4)
         if st.button("Guardar Entrada Diária", use_container_width=True): st.success("Guardado!")
 
-    col_t1, col_t2 = st.columns([3, 1], vertical_alignment="center")
+    # Top Header + Premium Quick Sync Button & Status Badge
+    col_t1, col_t2, col_t3 = st.columns([2.2, 1.2, 0.9], vertical_alignment="center")
     with col_t1:
         st.title("📌 Today / Decisão Diária")
         st.caption(f"Painel Executivo | {calib_label} | Modo: {st.session_state.user_mode}")
     with col_t2:
         if st.session_state.garmin_logged_in:
-            st.markdown(f'<div style="text-align: right;"><span class="status-badge-green">🟢 Garmin Sincronizado</span></div>', unsafe_allow_html=True)
+            st.markdown('<div style="text-align: right;"><span class="status-badge-green">🟢 Garmin Sincronizado</span></div>', unsafe_allow_html=True)
         else:
-            st.markdown(f'<div style="text-align: right;"><span class="status-badge-amber">🟡 Garmin Offline (Modo Demo)</span></div>', unsafe_allow_html=True)
+            st.markdown('<div style="text-align: right;"><span class="status-badge-amber">🟡 Garmin Offline</span></div>', unsafe_allow_html=True)
+    with col_t3:
+        if st.button("⚡ Garmin Sync", key="quick_garmin_sync", use_container_width=True):
+            try:
+                with st.spinner("A sincronizar..."):
+                    if st.session_state.garmin_logged_in:
+                        client = Garmin(st.session_state.garmin_email, st.session_state.garmin_pass)
+                        client.login()
+                    st.cache_data.clear()
+                    st.toast("⚡ Garmin Sincronizado com Sucesso!", icon="🟢")
+                    st.rerun()
+            except Exception as e:
+                st.toast(f"Erro na sincronização: {e}", icon="⚠️")
 
     if slope_info["slope"] < -0.15:
         st.error(f"⚠️ **Alerta de Drift:** Tendência descendente no VRC há 3 semanas ({slope_info['slope']} ms/dia). Considera deload.")
