@@ -241,6 +241,9 @@ hrv_curr, rhr_curr, sleep_curr = df_60d.iloc[-1]["HRV"], df_60d.iloc[-1]["RHR"],
 base_hrv = core.compute_baseline(df_60d["HRV"])
 hrv_mean_60d = base_hrv.mean if base_hrv else df_60d["HRV"].mean()
 
+base_rhr = core.compute_baseline(df_60d["RHR"])
+rhr_mean_60d = base_rhr.mean if base_rhr else df_60d["RHR"].mean()
+
 calib_state, calib_label = DataQualityEngine.get_calibration_state(len(df_60d))
 
 # Cálculo da Prontidão usando v5.0
@@ -419,7 +422,7 @@ elif top_nav == "🧬 Biomarcadores de Longevidade":
 
     h1, h2, h3 = st.columns(3)
     h1.metric("VO2 Máximo", f"{st.session_state.user_vo2max} mL/kg/min", f"Categoria: {cat_str}")
-    h2.metric("FC Repouso Média", f"{int(hrv_mean_60d)} bpm", "Faixa Ótima")
+    h2.metric("FC Repouso Média", f"{int(rhr_mean_60d)} bpm", "Faixa Ótima")
     h3.metric("Pontuação Healthspan Core", f"{hs['score'] or 'N/A'} / 100", "Índice Transparente")
 
     st.divider()
