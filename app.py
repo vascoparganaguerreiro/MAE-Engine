@@ -42,6 +42,7 @@ st.markdown("""
     .status-badge-green { background: rgba(16, 185, 129, 0.15); color: #10B981; border: 1px solid rgba(16, 185, 129, 0.4); padding: 7px 16px; border-radius: 20px; font-weight: 800; font-size: 0.85rem; display: inline-block; }
     .status-badge-amber { background: rgba(245, 158, 11, 0.15); color: #F59E0B; border: 1px solid rgba(245, 158, 11, 0.4); padding: 7px 16px; border-radius: 20px; font-weight: 800; font-size: 0.85rem; display: inline-block; }
     
+    /* Executive Quick Sync Button Styling */
     div.stButton > button[key="quick_garmin_sync"] {
         background: linear-gradient(135deg, #0EA5E9 0%, #2563EB 100%) !important;
         color: #FFFFFF !important;
@@ -51,6 +52,54 @@ st.markdown("""
         padding: 6px 18px !important;
         box-shadow: 0 4px 14px rgba(37, 99, 235, 0.35) !important;
         transition: all 0.2s ease-in-out !important;
+    }
+
+    /* Executive Action CTA Buttons Styling */
+    div.stButton > button[key="btn_mobility_cta"] {
+        background: linear-gradient(135deg, #1E293B 0%, #0F172A 100%) !important;
+        color: #CBD5E1 !important;
+        border: 1px solid #334155 !important;
+        border-radius: 12px !important;
+        font-weight: 700 !important;
+        padding: 12px 20px !important;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3) !important;
+        transition: all 0.2s ease-in-out !important;
+    }
+    div.stButton > button[key="btn_mobility_cta"]:hover {
+        border-color: #64748B !important;
+        color: #F8FAFC !important;
+    }
+
+    div.stButton > button[key="btn_workout_cta"] {
+        background: linear-gradient(135deg, #10B981 0%, #047857 100%) !important;
+        color: #FFFFFF !important;
+        border: 1px solid rgba(52, 211, 153, 0.5) !important;
+        border-radius: 12px !important;
+        font-weight: 800 !important;
+        padding: 12px 20px !important;
+        box-shadow: 0 4px 20px rgba(16, 185, 129, 0.4) !important;
+        transition: all 0.2s ease-in-out !important;
+    }
+    div.stButton > button[key="btn_workout_cta"]:hover {
+        transform: translateY(-2px) !important;
+        box-shadow: 0 6px 24px rgba(16, 185, 129, 0.6) !important;
+    }
+
+    div.stButton > button[key="btn_override_cta"] {
+        background: linear-gradient(135deg, #7F1D1D 0%, #450A0A 100%) !important;
+        color: #FCA5A5 !important;
+        border: 1px solid rgba(239, 68, 68, 0.5) !important;
+        border-radius: 12px !important;
+        font-weight: 800 !important;
+        padding: 12px 20px !important;
+        box-shadow: 0 4px 14px rgba(239, 68, 68, 0.25) !important;
+        transition: all 0.2s ease-in-out !important;
+    }
+    div.stButton > button[key="btn_override_cta"]:hover {
+        background: linear-gradient(135deg, #991B1B 0%, #7F1D1D 100%) !important;
+        color: #FFFFFF !important;
+        border-color: #EF4444 !important;
+        box-shadow: 0 6px 20px rgba(239, 68, 68, 0.45) !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -296,10 +345,13 @@ if top_nav == "📌 Today / Decisão Diária":
 
     if score >= 70 or st.session_state.override_train: 
         card_class, text = "hero-card-green", "Dia de Treino Normal: Capacidade Total"
+        workout_prescription_label = "🏃 Zona 2 Aeróbica (45 min)"
     elif score >= 45: 
         card_class, text = "hero-card-amber", "Dia Moderado: Reduzir Carga Axial e Intensidade"
+        workout_prescription_label = "🔄 Modular Treino: Zona 1 Spin"
     else: 
         card_class, text = "hero-card-red", "Dia de Recuperação Ativa: Preservar o Sistema Nervoso"
+        workout_prescription_label = "🧘 Recuperação Ativa / Caminhada (30 min)"
 
     st.markdown(f"""
     <div class="{card_class}">
@@ -316,14 +368,13 @@ if top_nav == "📌 Today / Decisão Diária":
     </div>
     """, unsafe_allow_html=True)
 
+    # Executive Premium Action CTA Buttons
     c_a1, c_a2, c_a3 = st.columns(3)
-    if c_a1.button("🧘 Prescrição Mobilidade (20 min)", use_container_width=True, type="primary" if score < 45 else "secondary"):
+    if c_a1.button("🧘 Prescrição Mobilidade (20 min)", key="btn_mobility_cta", use_container_width=True):
         st.info("3x60s Rotações Torácicas | 3x90s Abertura Anca 90/90")
-    if score < 45:
-        c_a2.button("🔄 Modular Treino: Zona 1 Spin", use_container_width=True)
-    else:
-        c_a2.button("🏃 Zona 2 Aeróbica (45 min)", use_container_width=True, type="primary")
-    if c_a3.button("⚠️ Treinar Mesmo Assim (Override)", use_container_width=True):
+    if c_a2.button(workout_prescription_label, key="btn_workout_cta", use_container_width=True):
+        st.success(f"Sessão Selecionada: **{workout_prescription_label}**. Bom treino!")
+    if c_a3.button("⚠️ Treinar Mesmo Assim (Override)", key="btn_override_cta", use_container_width=True):
         st.session_state.override_train = True
         st.rerun()
 
