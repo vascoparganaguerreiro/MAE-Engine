@@ -81,22 +81,45 @@ st.session_state.user_mode = st.sidebar.radio("Perfil Fisiológico:", ["🏃 Per
 st.sidebar.markdown("---")
 st.session_state.display_window = st.sidebar.select_slider("Janela Visual dos Gráficos:", options=[7, 14, 28, 60], value=st.session_state.display_window, format_func=lambda x: f"{x} Dias")
 
-with st.sidebar.expander("👤 **Estado Conexão Garmin**", expanded=not st.session_state.garmin_logged_in):
+# ==========================================
+# GARMIN CONNECTION SIDEBAR BOX
+# ==========================================
+with st.sidebar.expander("👤 **Estado Conexão Garmin**", expanded=True):
     if st.session_state.garmin_logged_in:
-        st.success(f"Conectado: {st.session_state.garmin_email}")
+        st.success(f"**Conectado:**\n\n{st.session_state.garmin_email}")
+        if st.button("🔑 Sincronizar Agora", use_container_width=True, type="primary"):
+            try:
+                with st.spinner("A sincronizar dados Garmin..."):
+                    client = Garmin(st.session_state.garmin_email, st.session_state.garmin_pass)
+                    client.login()
+                    st.cache_data.clear()
+                    st.success("Dados sincronizados com sucesso!")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Erro na sincronização: {e}")
         if st.button("🚪 Terminar Sessão", use_container_width=True):
             st.session_state.garmin_logged_in = False
             st.cache_data.clear()
             st.rerun()
     else:
-        e = st.text_input("E-mail Garmin", value=st.session_state.garmin_email)
-        p = st.text_input("Password Garmin", type="password", value=st.session_state.garmin_pass)
-        if st.button("🔑 Sincronizar", use_container_width=True):
-            st.session_state.garmin_logged_in = True
-            st.rerun()
+        input_email = st.text_input("E-mail Garmin", value=st.session_state.garmin_email)
+        input_password = st.text_input("Password Garmin", type="password", value=st.session_state.garmin_pass)
+        if st.button("🔑 Sincronizar", use_container_width=True, type="primary"):
+            try:
+                with st.spinner("A autenticar na nuvem Garmin..."):
+                    client = Garmin(input_email, input_password)
+                    client.login()
+                    st.session_state.garmin_logged_in = True
+                    st.session_state.garmin_email = input_email
+                    st.session_state.garmin_pass = input_password
+                    st.cache_data.clear()
+                    st.success("Conectado!")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Erro ao conectar: {e}")
 
 st.sidebar.markdown("---")
-# TODOS OS MÓDULOS RESTAURADOS AQUI
+
 top_nav = st.sidebar.radio(
     "Módulos da Plataforma:",
     [
@@ -138,7 +161,7 @@ df_60d = pd.DataFrame({
     "DailyLoad": loads,
     "SleepHours": np.random.normal(7.4, 0.8, 60).tolist()
 })
-# Ajustes agudos para hoje
+
 df_60d.loc[59, "HRV"] = 47.0
 df_60d.loc[59, "RHR"] = 52.0
 df_60d.loc[59, "SleepScore"] = 36.0
@@ -187,13 +210,14 @@ if top_nav == "📌 Today / Decisão Diária":
 
     if slope_info["slope"] < -0.15:
         st.error(f"⚠️ **Alerta de Drift:** Tendência descendente no VRC há 3 semanas ({slope_info['slope']} ms/dia). Considera deload.")
-        
+
     if score >= 70 or st.session_state.override_train: 
         card_class, text = "hero-card-green", "Dia de Treino Normal: Capacidade Total"
     elif score >= 45: 
         card_class, text = "hero-card-amber", "Dia Moderado: Reduzir Carga Axial e Intensidade"
     else: 
         card_class, text = "hero-card-red", "Dia de Recuperação Ativa: Preservar o Sistema Nervoso"
+
     st.markdown(f"""
     <div class="{card_class}">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
@@ -326,7 +350,7 @@ elif top_nav == "🧬 Biomarcadores de Longevidade":
         if st.button("Guardar Biomarcadores"): st.success("Guardado!")
 
 # ==========================================
-# MODULE 6: RACE HUB & PLANEAMENTO (NOVO v4)
+# MODULE 6: RACE HUB & PLANEAMENTO
 # ==========================================
 elif top_nav == "🎯 Race Hub & Planeamento":
     st.title("🎯 Race Hub & Planeamento Tático")
@@ -401,7 +425,7 @@ elif top_nav == "🎯 Race Hub & Planeamento":
             if st.form_submit_button("Guadar Debrief"): st.success("Registado!")
 
 # ==========================================
-# MODULE 7: GESTÃO DE SAPATILHAS (NOVO v4)
+# MODULE 7: GESTÃO DE SAPATILHAS
 # ==========================================
 elif top_nav == "👟 Gestão de Sapatilhas":
     st.title("👟 Rastreador de Desgaste Mecânico (Espuma Carbono)")
