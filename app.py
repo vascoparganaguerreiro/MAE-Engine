@@ -8,13 +8,15 @@ from datetime import date, datetime, timedelta
 from garminconnect import Garmin
 import google.generativeai as genai
 
+# Importações compatíveis com o engine_core.py v5.0
+import engine_core as core
 from engine_core import (
-    t, DataQualityEngine, get_hrv_context, compute_zscore_readiness,
-    compute_sleep_debt_7d, calculate_trend_slope, autoregulate_strength_workout,
-    estimate_1rm, calculate_srpe, compute_foster_load_metrics, compute_acwr,
-    compute_banister_ctl_atl_tsb, simulate_taper_projection, get_vo2_percentile,
-    calculate_biological_age, predict_race_time, calculate_dynamic_sweat_nutrition,
-    generate_pacing_band, calculate_carb_loading_protocol
+    t, DataQualityEngine, get_hrv_context,
+    calculate_trend, calculate_srpe, compute_acwr,
+    compute_banister, simulate_taper, generate_pacing_band,
+    calculate_race_nutrition, carb_loading_protocol,
+    build_strength_session, estimate_1rm, healthspan_score,
+    vo2_category, evaluate_biomarker, shoe_status
 )
 
 # ==========================================
@@ -86,7 +88,7 @@ if "races" not in st.session_state:
     ]
 
 if "shoes" not in st.session_state:
-    st.session_state.shoes = [{"model": "Adidas Adizero Adios Pro 4", "km_used": 142.0, "max_km": 250.0, "status": "Excelente 🟢"}]
+    st.session_state.shoes = [{"model": "Adidas Adizero Adios Pro 4", "km_used": 142.0, "max_km": 250.0}]
 
 if "debriefs" not in st.session_state: st.session_state.debriefs = []
 
@@ -139,7 +141,7 @@ def sync_garmin_data():
 # ==========================================
 # SIDEBAR NAVIGATION
 # ==========================================
-st.sidebar.markdown("### ⚡ **Apex Engine v4.1**")
+st.sidebar.markdown("### ⚡ **Apex Engine v5.0**")
 st.sidebar.caption("Autoregulation & Tactical Engine")
 
 st.session_state.lang = st.sidebar.selectbox("🌐 Idioma / Language:", ["PT", "EN"], index=0)
@@ -153,7 +155,7 @@ with st.sidebar.expander("👤 **Estado Conexão Garmin**", expanded=True):
         st.markdown(f"""
         <div style="background: rgba(16, 185, 129, 0.15); border: 1px solid #10B981; border-radius: 10px; padding: 12px; margin-bottom: 12px;">
             <span style="color: #10B981; font-weight: 800; font-size: 0.85rem;">🟢 Conectado ao Garmin Connect</span><br>
-            <span style="font-size: 0.8rem; color: #CBD5E1;">{st.session_state.garmin_email}</span>
+            <span style="font-size: 0.8rem; color: #CBD5E1;">{core.mask_email(st.session_state.garmin_email)}</span>
         </div>
         """, unsafe_allow_html=True)
         
@@ -221,20 +223,9 @@ with st.sidebar.expander("🔬 **Decaimento Banister (Avançado)**"):
     atl_decay_val = st.slider("Constante ATL (Dias):", 3, 14, 7)
 
 # ==========================================
-# PIPELINE DE DADOS (OVERRIDE COM DADOS REAIS)
+# PIPELINE DE DADOS (USANDO ENGINE CORE v5.0)
 # ==========================================
-np.random.seed(42)
-dates = [date.today() - timedelta(days=i) for i in range(59, -1, -1)]
-loads = [0.0 if i % 7 == 0 else (160.0 if i % 5 == 0 else 85.0) for i in range(60)]
-
-df_60d = pd.DataFrame({
-    "Date": dates,
-    "HRV": np.random.normal(67, 8, 60).tolist(),
-    "SleepScore": np.random.normal(75, 10, 60).tolist(),
-    "RHR": np.random.normal(48, 3, 60).tolist(),
-    "DailyLoad": loads,
-    "SleepHours": np.random.normal(7.4, 0.8, 60).tolist()
-})
+df_60d = core.generate_demo_history(days=60, seed=42)
 
 # Injetar dados reais da Garmin Connect no dia de hoje se sincronizado
 if st.session_state.garmin_logged_in and st.session_state.live_hrv is not None:
@@ -243,23 +234,26 @@ if st.session_state.garmin_logged_in and st.session_state.live_hrv is not None:
     df_60d.loc[59, "SleepScore"] = float(st.session_state.live_sleep_score)
     df_60d.loc[59, "SleepHours"] = float(st.session_state.live_sleep_hours)
 
+# Adicionar colunas CTL, ATL e TSB via v5.0
+df_60d = core.add_load_columns(df_60d, ctl_decay_val, atl_decay_val)
+
 hrv_curr, rhr_curr, sleep_curr = df_60d.iloc[-1]["HRV"], df_60d.iloc[-1]["RHR"], df_60d.iloc[-1]["SleepScore"]
-hrv_mean_60d, hrv_sd_60d = df_60d["HRV"].mean(), max(df_60d["HRV"].std(), 2.0)
-rhr_mean_60d, rhr_sd_60d = df_60d["RHR"].mean(), max(df_60d["RHR"].std(), 1.5)
-sleep_mean_60d, sleep_sd_60d = df_60d["SleepScore"].mean(), max(df_60d["SleepScore"].std(), 5.0)
+base_hrv = core.compute_baseline(df_60d["HRV"])
+hrv_mean_60d = base_hrv.mean if base_hrv else df_60d["HRV"].mean()
 
-calib_state, calib_label = DataQualityEngine.get_calibration_state(60)
-data_conf, conf_reasons = DataQualityEngine.evaluate_sleep_quality(df_60d.iloc[-1]["SleepHours"]*3600, 2400, 3600, 1200)
+calib_state, calib_label = DataQualityEngine.get_calibration_state(len(df_60d))
 
-readiness_data = compute_zscore_readiness(
-    hrv_curr, hrv_mean_60d, hrv_sd_60d, rhr_curr, rhr_mean_60d, rhr_sd_60d,
-    sleep_curr, sleep_mean_60d, sleep_sd_60d, 80.0, 70.0, 10.0, 4.0, user_mode=st.session_state.user_mode
-)
+# Cálculo da Prontidão usando v5.0
+zs_today = core.zscores_for_day(df_60d)
+readiness_data = core.compute_readiness(zs_today, mode=st.session_state.user_mode)
+dec_info = core.decision_for(readiness_data["score"])
 
-score = st.session_state.live_readiness if (st.session_state.garmin_logged_in and st.session_state.live_readiness is not None) else readiness_data["readiness_score"]
+score = st.session_state.live_readiness if (st.session_state.garmin_logged_in and st.session_state.live_readiness is not None) else (readiness_data["score"] or 65)
 hrv_context = get_hrv_context(hrv_curr, hrv_mean_60d)
-sleep_debt_val = compute_sleep_debt_7d(df_60d["SleepHours"].tolist())
-slope_info = calculate_trend_slope(df_60d["HRV"].tail(21).tolist())
+sleep_debt_info = core.compute_sleep_debt(df_60d["SleepHours"].tolist())
+sleep_debt_val = sleep_debt_info["debt_h"] if sleep_debt_info["debt_h"] is not None else 0.0
+
+trend_info = calculate_trend(df_60d["HRV"].tail(21).tolist())
 
 df_display = df_60d.tail(st.session_state.display_window).copy()
 
@@ -269,9 +263,9 @@ df_display = df_60d.tail(st.session_state.display_window).copy()
 if top_nav == "📌 Today / Decisão Diária":
     with st.expander("📝 **Daily Check-In: Registar Métricas Subjetivas (RPE & Soreness)**", expanded=False):
         c_s1, c_s2, c_s3 = st.columns(3)
-        c_s1.slider("Dor Muscular (DOMS):", 1, 5, 2)
-        c_s2.slider("Stress Psicológico:", 1, 5, 2)
-        c_s3.slider("Motivação / Humor:", 1, 5, 4)
+        sore = c_s1.slider("Dor Muscular (DOMS):", 1, 5, 2)
+        stress = c_s2.slider("Stress Psicológico:", 1, 5, 2)
+        mood = c_s3.slider("Motivação / Humor:", 1, 5, 4)
         if st.button("Guardar Entrada Diária", use_container_width=True): st.success("Guardado!")
 
     col_t1, col_t2, col_t3 = st.columns([2.2, 1.2, 0.9], vertical_alignment="center")
@@ -294,8 +288,8 @@ if top_nav == "📌 Today / Decisão Diária":
             except Exception as e:
                 st.toast(f"Erro na sincronização: {e}", icon="⚠️")
 
-    if slope_info["slope"] < -0.15:
-        st.error(f"⚠️ **Alerta de Drift:** Tendência descendente no VRC há 3 semanas ({slope_info['slope']} ms/dia). Considera deload.")
+    if trend_info["significant"] and trend_info["direction"] == "down":
+        st.error(f"⚠️ **Alerta de Drift:** {trend_info['text']} ({trend_info['slope']} ms/dia). Considera deload.")
 
     if score >= 70 or st.session_state.override_train: 
         card_class, text = "hero-card-green", "Dia de Treino Normal: Capacidade Total"
@@ -334,14 +328,14 @@ if top_nav == "📌 Today / Decisão Diária":
     st.subheader("📊 Biomarcadores Diários vs Linha de Base (60 Dias)")
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("🫀 VRC Noturno", f"{int(hrv_curr)} ms", f"{round(hrv_curr - hrv_mean_60d, 1)} vs 60d")
-    k2.metric("❤️ FC Repouso", f"{int(rhr_curr)} bpm", f"{round(rhr_curr - rhr_mean_60d, 1)} vs 60d")
+    k2.metric("❤️ FC Repouso", f"{int(rhr_curr)} bpm", f"Repouso Diário")
     k3.metric("🛌 Défice Sono (7d)", f"{sleep_debt_val} h", "Meta Diária: 8.0 h")
-    k4.metric("🧠 Prontidão Z-Score", f"{readiness_data['z_sum']} σ", "Desvio Acumulado")
+    k4.metric("🧠 Prontidão Z-Score", f"{readiness_data['z_sum'] or 0.0} σ", "Desvio Acumulado")
 
     st.divider()
     st.subheader("📊 Decomposição das Contribuições de Prontidão")
-    df_waterfall = pd.DataFrame(list(readiness_data["waterfall"].items()), columns=["Fator", "Impacto"])
-    fig_w = px.bar(df_waterfall, x="Fator", y="Impacto", color="Impacto", color_continuous_scale="RdYlGn", title="Pesos Z-Score")
+    df_waterfall = pd.DataFrame(list(readiness_data["contributions"].items()), columns=["Fator", "Impacto (Pontos)"])
+    fig_w = px.bar(df_waterfall, x="Fator", y="Impacto (Pontos)", color="Impacto (Pontos)", color_continuous_scale="RdYlGn", title="Contribuição dos Factores no Z-Score")
     fig_w.update_layout(template="plotly_dark")
     st.plotly_chart(fig_w, use_container_width=True)
 
@@ -354,8 +348,8 @@ elif top_nav == "📈 Tendência de VRC & Gráficos":
     df_chart["HRV_EWMA"] = df_chart["HRV"].ewm(span=7, adjust=False).mean()
     
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df_chart["Date"], y=[hrv_mean_60d + hrv_sd_60d]*len(df_chart), mode='lines', line=dict(width=0), showlegend=False))
-    fig.add_trace(go.Scatter(x=df_chart["Date"], y=[max(0, hrv_mean_60d - hrv_sd_60d)]*len(df_chart), mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(16, 185, 129, 0.1)', name="Linha Base (±1 σ)"))
+    fig.add_trace(go.Scatter(x=df_chart["Date"], y=[hrv_mean_60d + 8.0]*len(df_chart), mode='lines', line=dict(width=0), showlegend=False))
+    fig.add_trace(go.Scatter(x=df_chart["Date"], y=[max(0, hrv_mean_60d - 8.0)]*len(df_chart), mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(16, 185, 129, 0.1)', name="Linha Base (±1 SD)"))
     fig.add_trace(go.Scatter(x=df_chart["Date"], y=df_chart["HRV"], mode='lines+markers', name="VRC Diário (ms)", line=dict(color='#3B82F6', width=2)))
     fig.add_trace(go.Scatter(x=df_chart["Date"], y=df_chart["HRV_EWMA"], mode='lines', name="Tendência EWMA 7d", line=dict(color='#10B981', width=3, dash='dash')))
 
@@ -365,21 +359,22 @@ elif top_nav == "📈 Tendência de VRC & Gráficos":
 
     fig.update_layout(template="plotly_dark", hovermode="x unified", yaxis=dict(title="VRC (ms)"), yaxis2=dict(title="FC Repouso", overlaying="y", side="right") if show_rhr else None)
     st.plotly_chart(fig, use_container_width=True)
-    st.info(f"📈 **Trajetória Autonómica:** {slope_info['text']} ({slope_info['slope']} ms/dia)")
+    st.info(f"📈 **Trajetória Autonómica:** {trend_info['text']} ({trend_info['slope']} ms/dia)")
 
 # ==========================================
 # MODULE 3: ENGINE DE FORÇA & CARGA AXIAL
 # ==========================================
 elif top_nav == "🏋️ Engine de Força & Carga Axial":
-    st.title("🏋️ Engine de Força & Carga Axial")
-    presc = autoregulate_strength_workout(int(score))
-    st.metric("Pontuação de Carga Axial Prescrita:", f"{presc['spinal_score']} / 5.0")
-    st.info(f"💡 {presc['note']}")
+    st.title("🏋️ Engine de Força & Carga Axial (v5.0)")
+    sess = build_strength_session(cap=dec_info["cap"])
+    st.metric("Pontuação de Carga Axial Prescrita:", f"{sess['spinal_score']} / 5.0")
     
-    for ex in presc["workout"]:
-        if ex["substituted"]: st.warning(f"🔄 **{ex['exercise']}** | {ex['sets']}x{ex['reps']} @ {ex['intensity']} | Carga: {ex['target_kg']} kg\n*{ex['reason']}*")
-        else: st.success(f"✅ **{ex['exercise']}** | {ex['sets']}x{ex['reps']} @ {ex['intensity']} | Carga: {ex['target_kg']} kg")
-        st.caption(f"🎯 Músculos: {ex['active_muscles']} | 🛡️ Protege: {ex['joint_protected']}")
+    for ex in sess["exercises"]:
+        if ex["swapped"]: 
+            st.warning(f"🔄 **{ex['name']}** | {ex['sets']}x{ex['reps']} @ RIR {ex['rir']} | Carga: {ex['kg'] or 'N/A'} kg\n*{ex['why']}*")
+        else: 
+            st.success(f"✅ **{ex['name']}** | {ex['sets']}x{ex['reps']} @ RIR {ex['rir']} | Carga: {ex['kg'] or 'N/A'} kg")
+        st.caption(f"🎯 Padrão: {ex['pattern']} | 🛡️ Carga Axial: {ex['spinal']}/5")
 
     st.divider()
     st.subheader("📝 Registo de Carga Interna (sRPE)")
@@ -393,21 +388,21 @@ elif top_nav == "🏋️ Engine de Força & Carga Axial":
 # ==========================================
 elif top_nav == "📊 Analytics de Carga (CTL/ATL/TSB)":
     st.title("📊 Training Load Analytics (Banister)")
-    ctl_vals, atl_vals, tsb_vals = compute_banister_ctl_atl_tsb(df_60d["DailyLoad"].tolist(), ctl_decay_val, atl_decay_val)
+    ban_dict = compute_banister(df_60d["DailyLoad"].tolist(), ctl_decay_val, atl_decay_val)
+    ctl_vals, atl_vals, tsb_vals = ban_dict["ctl"], ban_dict["atl"], ban_dict["tsb"]
     acwr_val = compute_acwr(df_60d["DailyLoad"].tolist())
 
     c_l1, c_l2, c_l3, c_l4 = st.columns(4)
-    c_l1.metric("CTL (Fitness)", f"{ctl_vals[-1]} UA", help="Carga crónica acumulada nas últimas 6 semanas.")
-    c_l2.metric("ATL (Fadiga)", f"{atl_vals[-1]} UA", help="Cansaço agudo dos últimos 7 dias.")
-    c_l3.metric("TSB (Forma)", f"{tsb_vals[-1]} UA", help="Fitness menos Fadiga. Se positivo, estás fresco.")
-    c_l4.metric("Rácio ACWR (Segurança)", f"{acwr_val}", help="Ideal entre 0.8 e 1.3. Acima de 1.5 é risco de lesão.")
+    c_l1.metric("CTL (Fitness)", f"{ctl_vals[-1]} UA", help="Carga crónica acumulada.")
+    c_l2.metric("ATL (Fadiga)", f"{atl_vals[-1]} UA", help="Cansaço agudo recente.")
+    c_l3.metric("TSB (Forma)", f"{tsb_vals[-1]} UA", help="Fitness menos Fadiga.")
+    c_l4.metric("Rácio ACWR (Segurança)", f"{acwr_val or 'N/A'}", help="Ideal entre 0.8 e 1.3.")
 
     st.divider()
     df_load_disp = df_60d.tail(st.session_state.display_window).copy()
-    df_load_disp["CTL"], df_load_disp["ATL"], df_load_disp["TSB"] = ctl_vals[-st.session_state.display_window:], atl_vals[-st.session_state.display_window:], tsb_vals[-st.session_state.display_window:]
 
     fig_tsb = go.Figure()
-    fig_tsb.add_hrect(y0=10, y1=25, fillcolor="rgba(16, 185, 129, 0.15)", line_width=0, name="Zona de Polimento (Prova)")
+    fig_tsb.add_hrect(y0=5, y1=25, fillcolor="rgba(16, 185, 129, 0.15)", line_width=0, name="Zona de Polimento (Prova)")
     fig_tsb.add_trace(go.Scatter(x=df_load_disp["Date"], y=df_load_disp["CTL"], name="CTL (Fitness)", line=dict(color='#3B82F6', width=3)))
     fig_tsb.add_trace(go.Scatter(x=df_load_disp["Date"], y=df_load_disp["ATL"], name="ATL (Fadiga)", line=dict(color='#EF4444', width=2)))
     fig_tsb.add_trace(go.Scatter(x=df_load_disp["Date"], y=df_load_disp["TSB"], name="TSB (Forma)", line=dict(color='#10B981', width=2, dash='dot')))
@@ -419,21 +414,28 @@ elif top_nav == "📊 Analytics de Carga (CTL/ATL/TSB)":
 # ==========================================
 elif top_nav == "🧬 Biomarcadores de Longevidade":
     st.title("🧬 Biomarcadores de Longevidade & Healthspan")
-    pct_str = get_vo2_percentile(st.session_state.user_vo2max, st.session_state.user_age)
-    bio_age = calculate_biological_age(st.session_state.user_age, st.session_state.user_vo2max, rhr_mean_60d, hrv_mean_60d)
+    cat_str, vo2_pts = vo2_category(st.session_state.user_vo2max, st.session_state.user_age, st.session_state.user_gender)
+    hs = healthspan_score(vo2_pts, rhr_mean_60d, 0.4, 180)
 
     h1, h2, h3 = st.columns(3)
-    h1.metric("VO2 Máximo", f"{st.session_state.user_vo2max} mL/kg/min", pct_str)
-    h2.metric("FC Repouso Média", f"{int(rhr_mean_60d)} bpm", "Faixa Ótima")
-    h3.metric("Idade Biológica Estimada", f"{bio_age} Anos", f"Cronológica: {st.session_state.user_age} a")
+    h1.metric("VO2 Máximo", f"{st.session_state.user_vo2max} mL/kg/min", f"Categoria: {cat_str}")
+    h2.metric("FC Repouso Média", f"{int(hrv_mean_60d)} bpm", "Faixa Ótima")
+    h3.metric("Pontuação Healthspan Core", f"{hs['score'] or 'N/A'} / 100", "Índice Transparente")
 
     st.divider()
-    with st.expander("🩸 **Registo de Painel Sanguíneo**"):
+    with st.expander("🩸 **Registo de Painel Sanguíneo & Avaliação de Biomarcadores**"):
         c_b1, c_b2, c_b3 = st.columns(3)
-        c_b1.number_input("ApoB (mg/dL):", value=75)
-        c_b2.number_input("hs-CRP (mg/L):", value=0.5)
-        c_b3.number_input("HbA1c (%):", value=5.1)
-        if st.button("Guardar Biomarcadores"): st.success("Guardado!")
+        apob_v = c_b1.number_input("ApoB (mg/dL):", value=75.0)
+        hba1c_v = c_b2.number_input("HbA1c (%):", value=5.1)
+        hscrp_v = c_b3.number_input("hs-CRP (mg/L):", value=0.5)
+        
+        res_apob = evaluate_biomarker("apob", apob_v)
+        res_hba1c = evaluate_biomarker("hba1c", hba1c_v)
+        res_crp = evaluate_biomarker("hscrp", hscrp_v)
+        
+        st.write(f"• **ApoB:** {apob_v} mg/dL -> **{res_apob['text']}**")
+        st.write(f"• **HbA1c:** {hba1c_v} % -> **{res_hba1c['text']}**")
+        st.write(f"• **hs-CRP:** {hscrp_v} mg/L -> **{res_crp['text']}**")
 
 # ==========================================
 # MODULE 6: RACE HUB & PLANEAMENTO
@@ -468,66 +470,60 @@ elif top_nav == "🎯 Race Hub & Planeamento":
     """, unsafe_allow_html=True)
 
     if delta.days <= 3:
-        cp = calculate_carb_loading_protocol(st.session_state.user_weight)
-        st.error(f"🚨 **CARBO-LOADING ATIVO (72H):** Prescrição: **{cp['daily_target_g']} /dia**.")
+        cp = carb_loading_protocol(st.session_state.user_weight, 2.0)
+        st.error(f"🚨 **CARBO-LOADING ATIVO:** Prescrição: **{cp['daily_g'][0]}g a {cp['daily_g'][1]}g por dia**.")
 
     st.divider()
     st.subheader("☀️ Calculadora Dinâmica de Suor & Estresse Térmico")
     cw1, cw2, cw3 = st.columns(3)
     temp = cw1.slider("Temperatura (°C):", 5.0, 40.0, 24.0)
     hum = cw2.slider("Humidade (%):", 20.0, 100.0, 65.0)
-    dur = cw3.number_input("Duração Est. (Horas):", value=4.5)
+    dur = cw3.number_input("Duração Est. (Horas):", value=2.0)
     
-    nutri = calculate_dynamic_sweat_nutrition(st.session_state.user_weight, st.session_state.user_bf_pct, st.session_state.user_gender, primary.get("type", "10K / Meia Maratona (21k)"), dur, temp, hum)
+    nutri = calculate_race_nutrition(dur, temp, hum)
     n1, n2, n3, n4 = st.columns(4)
-    n1.metric("Água", f"{nutri['fluid_hr_ml']} mL/h", f"Total: {nutri['total_fluid_l']} L")
-    n2.metric("Sódio", f"{nutri['sodium_hr_mg']} mg/h", f"Total: {nutri['total_sodium_mg']} mg")
-    n3.metric("HC", f"{nutri['carbs_hr_g']} g/h", f"Total: {nutri['total_carbs_g']} g")
-    n4.metric("Estresse Térmico", nutri['thermal_stress_level'])
+    n1.metric("Água", f"{nutri['fluid_ml_h'][0]}-{nutri['fluid_ml_h'][1]} mL/h")
+    n2.metric("Sódio", f"{nutri['sodium_mg_h'][0]}-{nutri['sodium_mg_h'][1]} mg/h")
+    n3.metric("Hidratos de Carbono", f"{nutri['carbs_g_h'][0]}-{nutri['carbs_g_h'][1]} g/h")
+    n4.metric("Estresse Térmico (WBGT)", f"{nutri['wbgt']} °C ({nutri['heat']})")
 
     st.divider()
-    st.subheader("⏱️ Pacing Band (Com GAP para Altimetria)")
-    tgt_pace = st.number_input("Ritmo Alvo (min/km):", value=4.15)
-    st.dataframe(generate_pacing_band(tgt_pace, primary["dist_km"], st.session_state.user_hr_max).head(10), use_container_width=True)
+    st.subheader("⏱️ Pacing Band (Com Ajuste de Altimetria)")
+    tgt_pace_s = 255.0  # 4:15 min/km
+    st.dataframe(generate_pacing_band(tgt_pace_s, primary["dist_km"], st.session_state.user_hr_max).drop(columns=["_pace_s", "_dist"]), use_container_width=True)
 
     st.divider()
-    st.subheader("📈 Visualizador de Taper (14 Dias)")
-    ctl_vals, atl_vals, tsb_vals = compute_banister_ctl_atl_tsb(df_60d["DailyLoad"].tolist(), 42.0, 7.0)
-    df_taper = simulate_taper_projection(ctl_vals[-1], atl_vals[-1])
+    st.subheader("📈 Projeção de Taper (14 Dias)")
+    ban_curr = compute_banister(df_60d["DailyLoad"].tolist(), ctl_decay_val, atl_decay_val)
+    df_taper = simulate_taper(ban_curr["ctl"][-1], ban_curr["atl"][-1], 80.0)
+    
     fig_tp = go.Figure()
-    fig_tp.add_hrect(y0=10, y1=25, fillcolor="rgba(16, 185, 129, 0.15)", line_width=0, name="Zona Polimento")
-    fig_tp.add_trace(go.Scatter(x=df_taper["Date"], y=df_taper["CTL_Proj"], name="CTL (Fitness)", line=dict(color='#3B82F6')))
-    fig_tp.add_trace(go.Scatter(x=df_taper["Date"], y=df_taper["ATL_Proj"], name="ATL (Fadiga)", line=dict(color='#EF4444')))
-    fig_tp.add_trace(go.Scatter(x=df_taper["Date"], y=df_taper["TSB_Proj"], name="TSB (Forma)", line=dict(color='#10B981', dash='dot')))
+    fig_tp.add_hrect(y0=5, y1=25, fillcolor="rgba(16, 185, 129, 0.15)", line_width=0, name="Zona Polimento")
+    fig_tp.add_trace(go.Scatter(x=df_taper["Date"], y=df_taper["CTL"], name="CTL (Fitness)", line=dict(color='#3B82F6')))
+    fig_tp.add_trace(go.Scatter(x=df_taper["Date"], y=df_taper["ATL"], name="ATL (Fadiga)", line=dict(color='#EF4444')))
+    fig_tp.add_trace(go.Scatter(x=df_taper["Date"], y=df_taper["TSB"], name="TSB (Forma)", line=dict(color='#10B981', dash='dot')))
     fig_tp.update_layout(template="plotly_dark", hovermode="x unified")
     st.plotly_chart(fig_tp, use_container_width=True)
-
-    with st.expander("📝 **Debrief Pós-Prova**"):
-        with st.form("debrief_form"):
-            st.text_input("Tempo Final Real:")
-            st.number_input("HC Consumidos (g/h):", value=65.0)
-            st.slider("RPE (1-10):", 1, 10, 8)
-            st.text_area("Notas:")
-            if st.form_submit_button("Guadar Debrief"): st.success("Registado!")
 
 # ==========================================
 # MODULE 7: GESTÃO DE SAPATILHAS
 # ==========================================
 elif top_nav == "👟 Gestão de Sapatilhas":
     st.title("👟 Rastreador de Desgaste Mecânico (Espuma Carbono)")
-    for idx, shoe in enumerate(st.session_state.shoes):
+    for shoe in st.session_state.shoes:
+        status_label, tone, frac = shoe_status(shoe["km_used"], shoe["max_km"])
         c_s1, c_s2, c_s3 = st.columns([3, 2, 2])
         c_s1.markdown(f"**{shoe['model']}**")
         c_s2.write(f"{shoe['km_used']} km / {shoe['max_km']} km")
-        c_s3.write(f"Estado: **{shoe['status']}**")
-        st.progress(min(1.0, shoe["km_used"] / shoe["max_km"]))
+        c_s3.write(f"Estado: **{status_label}**")
+        st.progress(min(1.0, frac))
     
     st.divider()
     with st.form("add_sh"):
         m = st.text_input("Modelo:")
         km = st.number_input("Limite (km):", value=250.0)
         if st.form_submit_button("Adicionar") and m:
-            st.session_state.shoes.append({"model": m, "km_used": 0.0, "max_km": km, "status": "Nova 🟢"})
+            st.session_state.shoes.append({"model": m, "km_used": 0.0, "max_km": km})
             st.rerun()
 
 # ==========================================
@@ -537,12 +533,17 @@ elif top_nav == "🤖 Coach IA Apex (Gemini)":
     st.title("🤖 Coach IA Apex")
     key = os.environ.get("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", None)
     if not key:
-        st.info("💡 Adiciona a tua `GEMINI_API_KEY` nos secrets para ativar.")
+        st.info("💡 Adiciona a tua `GEMINI_API_KEY` nos secrets do Streamlit para ativar.")
     else:
         genai.configure(api_key=key)
         msg = st.chat_input("Pergunta ao Coach IA...")
         if msg:
-            st.chat_message("user").write(msg)
-            model = genai.GenerativeModel('gemini-1.5-flash')
-            res = model.generate_content(f"Utilizador diz: {msg}. Prontidão={score}, VRC={hrv_curr}ms.")
-            st.chat_message("assistant").write(res.text)
+            red_flag = core.red_flag_check(msg)
+            if red_flag:
+                st.error(f"🚨 {red_flag}")
+            else:
+                st.chat_message("user").write(msg)
+                model = genai.GenerativeModel('gemini-1.5-flash')
+                ctx = core.build_coach_context({"readiness": score, "hrv": hrv_curr, "mode": st.session_state.user_mode})
+                res = model.generate_content(f"{core.COACH_SYSTEM_PROMPT}\n\nContexto: {ctx}\n\nPergunta: {msg}")
+                st.chat_message("assistant").write(res.text)
