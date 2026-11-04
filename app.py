@@ -36,6 +36,9 @@ st.markdown("""
     .timer-block { text-align: center; }
     .timer-number { font-size: 2.8rem; font-weight: 900; color: #3B82F6; font-family: 'Courier New', monospace; text-shadow: 0 0 12px rgba(59, 130, 246, 0.5); }
     .timer-label { font-size: 0.75rem; text-transform: uppercase; color: #94A3B8; font-weight: 700; }
+    
+    .status-badge-green { background: rgba(16, 185, 129, 0.2); color: #10B981; border: 1px solid rgba(16, 185, 129, 0.4); padding: 6px 14px; border-radius: 20px; font-weight: 800; font-size: 0.85rem; }
+    .status-badge-amber { background: rgba(245, 158, 11, 0.2); color: #F59E0B; border: 1px solid rgba(245, 158, 11, 0.4); padding: 6px 14px; border-radius: 20px; font-weight: 800; font-size: 0.85rem; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -50,7 +53,7 @@ if "user_mode" not in st.session_state: st.session_state.user_mode = "🏃 Perfo
 if "display_window" not in st.session_state: st.session_state.display_window = 14
 if "override_train" not in st.session_state: st.session_state.override_train = False
 
-# Profiles
+# User Profile Defaults
 if "user_weight" not in st.session_state: st.session_state.user_weight = 75.0
 if "user_bf_pct" not in st.session_state: st.session_state.user_bf_pct = 12.0
 if "user_gender" not in st.session_state: st.session_state.user_gender = "Masculino"
@@ -86,17 +89,24 @@ st.session_state.display_window = st.sidebar.select_slider("Janela Visual dos Gr
 # ==========================================
 with st.sidebar.expander("👤 **Estado Conexão Garmin**", expanded=True):
     if st.session_state.garmin_logged_in:
-        st.success(f"**Conectado:**\n\n{st.session_state.garmin_email}")
+        st.markdown(f"""
+        <div style="background: rgba(16, 185, 129, 0.15); border: 1px solid #10B981; border-radius: 10px; padding: 12px; margin-bottom: 12px;">
+            <span style="color: #10B981; font-weight: 800; font-size: 0.85rem;">🟢 Conectado ao Garmin Connect</span><br>
+            <span style="font-size: 0.8rem; color: #CBD5E1;">{st.session_state.garmin_email}</span>
+        </div>
+        """, unsafe_allow_html=True)
+        
         if st.button("🔑 Sincronizar Agora", use_container_width=True, type="primary"):
             try:
-                with st.spinner("A sincronizar dados Garmin..."):
+                with st.spinner("A sincronizar dados Garmin em tempo real..."):
                     client = Garmin(st.session_state.garmin_email, st.session_state.garmin_pass)
                     client.login()
                     st.cache_data.clear()
-                    st.success("Dados sincronizados com sucesso!")
+                    st.success("Dados Garmin sincronizados!")
                     st.rerun()
             except Exception as e:
                 st.error(f"Erro na sincronização: {e}")
+                
         if st.button("🚪 Terminar Sessão", use_container_width=True):
             st.session_state.garmin_logged_in = False
             st.cache_data.clear()
@@ -113,7 +123,7 @@ with st.sidebar.expander("👤 **Estado Conexão Garmin**", expanded=True):
                     st.session_state.garmin_email = input_email
                     st.session_state.garmin_pass = input_password
                     st.cache_data.clear()
-                    st.success("Conectado!")
+                    st.success("Conectado com sucesso!")
                     st.rerun()
             except Exception as e:
                 st.error(f"Erro ao conectar: {e}")
@@ -202,11 +212,10 @@ if top_nav == "📌 Today / Decisão Diária":
         st.title("📌 Today / Decisão Diária")
         st.caption(f"Painel Executivo | {calib_label} | Modo: {st.session_state.user_mode}")
     with col_t2:
-        with st.popover(f"🛡️ Confiança: {data_conf*100:.0f}%"):
-            st.write(f"**Confiança:** {data_conf*100:.0f}%")
-            if conf_reasons:
-                for r in conf_reasons: st.warning(f"• {r}")
-            else: st.success("Dados completos.")
+        if st.session_state.garmin_logged_in:
+            st.markdown(f'<div style="text-align: right;"><span class="status-badge-green">🟢 Garmin Sincronizado</span></div>', unsafe_allow_html=True)
+        else:
+            st.markdown(f'<div style="text-align: right;"><span class="status-badge-amber">🟡 Garmin Offline (Modo Demo)</span></div>', unsafe_allow_html=True)
 
     if slope_info["slope"] < -0.15:
         st.error(f"⚠️ **Alerta de Drift:** Tendência descendente no VRC há 3 semanas ({slope_info['slope']} ms/dia). Considera deload.")
