@@ -3,5 +3,5 @@ pandas>=2.1
 numpy>=1.26
 plotly>=5.22
 garminconnect>=0.3.0
-google-generativeai
+google-genai
 pytest>=8.0
