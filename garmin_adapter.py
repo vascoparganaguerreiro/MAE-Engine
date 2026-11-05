@@ -46,7 +46,7 @@ def fetch_daily_metrics(email: str, password: str, target_date: date) -> Tuple[D
     except Exception as exc:
         warnings.append(f"Não foi possível obter dados de sono: {exc}")
 
-    # 4. Garmin Training Readiness (Extrai o valor mais recente)
+    # 4. Garmin Training Readiness
     try:
         readiness_data = client.get_training_readiness(date_str)
         if isinstance(readiness_data, list) and len(readiness_data) > 0:
@@ -69,44 +69,41 @@ def fetch_daily_metrics(email: str, password: str, target_date: date) -> Tuple[D
     return metrics, warnings
 
 
-def fetch_historical_metrics(email: str, password: str, days: int = 60) -> List[Dict[str, Any]]:
-    """Recupera até 'days' dias de histórico de VRC, RHR, Sono e Readiness diretamente da API."""
+def fetch_historical_metrics(email: str, password: str, days: int = 30) -> List[Dict[str, Any]]:
+    """Recupera o histórico recente de VRC e RHR iterando de forma segura dia a dia."""
     client = Garmin(email, password)
     client.login()
     
     end_d = date.today()
-    start_d = end_d - timedelta(days=days)
-    
-    records_by_date: Dict[str, Dict[str, Any]] = {}
-    
-    def get_rec(d_str: str) -> Dict[str, Any]:
-        if d_str not in records_by_date:
-            records_by_date[d_str] = {"date": d_str}
-        return records_by_date[d_str]
+    records: List[Dict[str, Any]] = []
 
-    # VRC Histórica
-    try:
-        hrv_res = client.get_hrv_data(end_d.isoformat())
-        if isinstance(hrv_res, dict):
-            summaries = hrv_res.get("hrvSummaries", []) or hrv_res.get("userDailyHrvSummaries", [])
-            for s in summaries:
-                c_date = s.get("calendarDate")
-                val = s.get("lastNightAvg") or s.get("weeklyAvg")
-                if c_date and val is not None:
-                    get_rec(c_date)["hrv"] = float(val)
-    except Exception:
-        pass
-
-    # RHR e Sono via loops de fallback seguros
-    curr = start_d
-    while curr <= end_d:
-        d_str = curr.isoformat()
+    for i in range(days):
+        target_d = end_d - timedelta(days=i)
+        d_str = target_d.isoformat()
+        rec: Dict[str, Any] = {"date": d_str}
+        
+        # Tenta VRC
         try:
-            hr_d = client.get_rhr_day(d_str)
-            if isinstance(hr_d, dict) and hr_d.get("restingHeartRate"):
-                get_rec(d_str)["rhr"] = float(hr_d["restingHeartRate"])
+            hrv_data = client.get_hrv_data(d_str)
+            if isinstance(hrv_data, dict):
+                summary = hrv_data.get("hrvSummary", {})
+                val = summary.get("lastNightAvg") or summary.get("weeklyAvg")
+                if val is not None:
+                    rec["hrv"] = float(val)
         except Exception:
             pass
-        curr += timedelta(days=1)
+            
+        # Tenta RHR
+        try:
+            hr_data = client.get_rhr_day(d_str)
+            if isinstance(hr_data, dict) and hr_data.get("restingHeartRate"):
+                rec["rhr"] = float(hr_data["restingHeartRate"])
+        except Exception:
+            pass
 
-    return list(records_by_date.values())
+        if len(rec) > 1:
+            records.append(rec)
+            
+        time.sleep(0.1)  # Previne rate-limiting
+
+    return records
