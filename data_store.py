@@ -59,14 +59,14 @@ def init_db():
             );
         """)
 
-        # Migração de schema segura e tolerante a falhas
+        # Migração dinâmica tolerante a ficheiros SQLite existentes
         cursor.execute("PRAGMA table_info(daily_metrics);")
-        columns = [row["name"] for row in cursor.fetchall()]
+        existing_cols = [row["name"] for row in cursor.fetchall()]
         
-        for col_name in ["sleep_target_hours", "hrv_weekly_avg", "vendor_readiness_source"]:
-            if col_name not in columns:
+        for col in ["sleep_target_hours", "hrv_weekly_avg", "vendor_readiness_source", "hrv_source", "rhr_source", "sleep_score_source", "sleep_hours_source"]:
+            if col not in existing_cols:
                 try:
-                    cursor.execute(f"ALTER TABLE daily_metrics ADD COLUMN {col_name} REAL;")
+                    cursor.execute(f"ALTER TABLE daily_metrics ADD COLUMN {col} REAL;")
                 except Exception:
                     pass
 
@@ -182,16 +182,18 @@ def upsert_daily_metrics(target_date: date, metrics: Dict[str, Any], source: str
                     
         data["updated_at"] = now_str
         
-        cols = list(data.keys())
+        cols = [c for c in data.keys() if c in DAILY_FIELDS or c in ["date", "updated_at"]]
         placeholders = ", ".join(["?"] * len(cols))
         updates = ", ".join([f"{c}=excluded.{c}" for c in cols if c != "date"])
+        
+        vals = [data[c] for c in cols]
         
         sql = f"""
             INSERT INTO daily_metrics ({", ".join(cols)})
             VALUES ({placeholders})
             ON CONFLICT(date) DO UPDATE SET {updates};
         """
-        cursor.execute(sql, list(data.values()))
+        cursor.execute(sql, vals)
         conn.commit()
 
 
@@ -214,16 +216,17 @@ def bulk_insert_garmin_history(records: List[Dict[str, Any]]) -> int:
                     data[f"{k}_source"] = "garmin_import"
             data["updated_at"] = now_str
             
-            cols = list(data.keys())
+            cols = [c for c in data.keys() if c in DAILY_FIELDS or c in ["date", "updated_at"]]
             placeholders = ", ".join(["?"] * len(cols))
             updates = ", ".join([f"{c}=excluded.{c}" for c in cols if c != "date"])
+            vals = [data[c] for c in cols]
             
             sql = f"""
                 INSERT INTO daily_metrics ({", ".join(cols)})
                 VALUES ({placeholders})
                 ON CONFLICT(date) DO UPDATE SET {updates};
             """
-            cursor.execute(sql, list(data.values()))
+            cursor.execute(sql, vals)
             count += 1
         conn.commit()
     return count
