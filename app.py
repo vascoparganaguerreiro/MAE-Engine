@@ -189,17 +189,23 @@ def _parse_garmin_file_content(file_name: str, content: bytes) -> List[Dict[str,
                     if hrv_val is not None:
                         rec["hrv"] = _clean_number(hrv_val)
 
-                    # Sono (Horas e Score)
+                    # Sono (Horas e Score) - Deteção robusta para múltiplos esquemas JSON Garmin
                     sleep_dto = item.get("userDailySleepDTO") or item
-                    sleep_sec = sleep_dto.get("sleepTimeSeconds") or sleep_dto.get("totalSleepHours")
+                    sleep_sec = (
+                        sleep_dto.get("sleepTimeSeconds")
+                        or sleep_dto.get("totalSleepHours")
+                        or sleep_dto.get("unmeasurableSleepSeconds")
+                        or item.get("sleepTimeSeconds")
+                    )
                     if sleep_sec is not None:
                         sec_num = _clean_number(sleep_sec)
-                        if sec_num:
-                            rec["sleep_hours"] = round(sec_num / 3600.0, 2) if sec_num > 24 else sec_num
+                        if sec_num and sec_num > 0:
+                            rec["sleep_hours"] = round(sec_num / 3600.0, 2) if sec_num > 24 else round(sec_num, 2)
 
                     sleep_score = (
                         sleep_dto.get("sleepScores", {}).get("overall", {}).get("value")
                         or sleep_dto.get("overallScore")
+                        or item.get("overallScore")
                     )
                     if sleep_score is not None:
                         rec["sleep_score"] = _clean_number(sleep_score)
