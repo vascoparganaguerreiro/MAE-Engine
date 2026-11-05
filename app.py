@@ -80,7 +80,6 @@ def _fmt(value: Any, digits: int = 1, suffix: str = "") -> str:
 
 
 def _fmt_hours_to_hm(hours_val: Optional[float]) -> str:
-    """Converte horas decimais (ex.: 7.8) para o formato '7h 48m'."""
     if hours_val is None or pd.isna(hours_val) or hours_val <= 0:
         return "—"
     total_minutes = int(round(float(hours_val) * 60))
@@ -94,7 +93,6 @@ def _fmt_hours_to_hm(hours_val: Optional[float]) -> str:
 
 
 def _fmt_minutes_diff(diff_min: Optional[float]) -> str:
-    """Converte a diferença em minutos para uma string clara de défice/excedente (ex.: '12 min')."""
     if diff_min is None or pd.isna(diff_min):
         return "—"
     diff_val = int(round(float(diff_min)))
@@ -113,6 +111,18 @@ def _clean_number(value: Any) -> Optional[float]:
         return None
 
 
+def _update_profile_if_missing(new_prof: Dict[str, Any]):
+    """Atualiza o perfil nas definições do SQLite mantendo os campos introduzidos manualmente."""
+    curr = store.get_setting("profile", {}) or {}
+    updated = False
+    for k in ["gender", "age", "weight_kg", "vo2max", "hr_max"]:
+        if new_prof.get(k) is not None and not curr.get(k):
+            curr[k] = new_prof[k]
+            updated = True
+    if updated:
+        store.set_setting("profile", curr)
+
+
 def _run_garmin_sync() -> bool:
     """Executa a sincronização direta com os servidores Garmin Connect."""
     email = _secret("GARMIN_EMAIL") or str(st.session_state.get("garmin_email_input", "")).strip()
@@ -129,6 +139,10 @@ def _run_garmin_sync() -> bool:
     try:
         metrics, warnings = fetch_garmin_metrics(email, password, date.today())
         if metrics:
+            prof_ext = metrics.pop("profile_extracted", None)
+            if prof_ext:
+                _update_profile_if_missing(prof_ext)
+
             store.upsert_daily_metrics(date.today(), metrics, source="garmin")
             store.set_setting("garmin_last_sync", datetime.now().isoformat(timespec="seconds"))
             st.session_state["garmin_sync_result"] = {
@@ -157,6 +171,27 @@ def _parse_garmin_file_content(file_name: str, content: bytes) -> List[Dict[str,
     """Parser para relatórios exportados do Garmin Connect (CSV e JSON)."""
     records: List[Dict[str, Any]] = []
     fname_lower = file_name.lower()
+
+    # Extração de perfil de ficheiros JSON de perfil de utilizador
+    if "userprofile" in fname_lower or "profile" in fname_lower:
+        try:
+            prof_data = json.loads(content.decode("utf-8", errors="ignore"))
+            ext: Dict[str, Any] = {}
+            if isinstance(prof_data, dict):
+                if prof_data.get("gender"):
+                    g_str = str(prof_data["gender"]).upper()
+                    ext["gender"] = "Masculino" if "MALE" in g_str and "FEMALE" not in g_str else "Feminino" if "FEMALE" in g_str else None
+                if prof_data.get("weight"):
+                    w = float(prof_data["weight"])
+                    ext["weight_kg"] = round(w / 1000.0, 1) if w > 300 else round(w, 1)
+                if prof_data.get("vo2MaxRunning") or prof_data.get("vo2MaxValue"):
+                    ext["vo2max"] = float(prof_data.get("vo2MaxRunning") or prof_data.get("vo2MaxValue"))
+                if prof_data.get("runningMaxHeartRate") or prof_data.get("maxHeartRate"):
+                    ext["hr_max"] = float(prof_data.get("runningMaxHeartRate") or prof_data.get("maxHeartRate"))
+                if ext:
+                    _update_profile_if_missing(ext)
+        except Exception:
+            pass
 
     if fname_lower.endswith(".csv"):
         try:
@@ -473,7 +508,6 @@ score = int(garmin_readiness_curr) if garmin_readiness_curr is not None else rea
 decision = core.decision_for(score) if score is not None else {"cap": "full", "headline": "Sem prontidão", "tone": "amber"}
 hrv_context = core.get_hrv_context(hrv_curr, hrv_mean, base_hrv.sd if base_hrv else None)
 
-# Cálculo dinâmico do défice/excedente em minutos comparado com a meta recomendada Garmin
 if sleep_hours_curr is not None:
     diff_minutes = (sleep_target_curr - sleep_hours_curr) * 60.0
 else:
