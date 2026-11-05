@@ -57,10 +57,12 @@ def _optional_float(raw: Any, label: str, minimum: Optional[float] = None,
 
 def render_today_page(base_df: pd.DataFrame, hrv_mean: Optional[float], rhr_mean: Optional[float],
                       hrv_curr: Optional[float], rhr_curr: Optional[float], sleep_curr: Optional[float],
-                      sleep_hours_curr: Optional[float], sleep_target_curr: float,
+                      sleep_hours_curr: Optional[float], sleep_target_curr: Optional[float],
                       garmin_readiness_curr: Optional[float], score: Optional[int],
                       decision: Dict[str, Any], hrv_context: Dict[str, Any], diff_minutes: Optional[float],
                       hrv_valid_days: int, sync_callback):
+
+    latest = base_df.iloc[-1]
 
     head_col1, head_col2 = st.columns([3, 1])
     with head_col1:
@@ -102,18 +104,55 @@ def render_today_page(base_df: pd.DataFrame, hrv_mean: Optional[float], rhr_mean
             except ValueError as exc:
                 st.error(str(exc))
 
-    latest = base_df.iloc[-1]
+    # Fontes dos dados de hoje
+    hrv_src = str(latest.get("hrv_source")) if pd.notna(latest.get("hrv_source")) else "Sem dado"
+    rhr_src = str(latest.get("rhr_source")) if pd.notna(latest.get("rhr_source")) else "Sem dado"
+    sleep_src = str(latest.get("sleep_hours_source")) if pd.notna(latest.get("sleep_hours_source")) else "Sem dado"
+
+    # 1. FC de repouso (subida acima da base = alerta/vermelho)
+    if rhr_curr is not None and rhr_mean is not None:
+        rhr_diff = rhr_curr - rhr_mean
+        rhr_delta_str = f"{rhr_diff:+.1f} bpm vs base ({rhr_mean:.1f})"
+        rhr_color = "inverse" if rhr_diff > 1.0 else "normal"
+    else:
+        rhr_delta_str = f"Base: {_fmt(rhr_mean, 1, ' bpm')}" if rhr_mean is not None else f"[{rhr_src}]"
+        rhr_color = "normal"
+
+    # 2. Défice de sono (défice real > 0 = alerta/vermelho; excedente <= 0 = bom/verde)
+    if diff_minutes is not None:
+        if diff_minutes > 0:
+            sleep_delta_str = f"Faltam {int(diff_minutes)} min para a meta"
+            sleep_color = "inverse"
+        else:
+            sleep_delta_str = f"+{abs(int(diff_minutes))} min acima da meta"
+            sleep_color = "normal"
+    else:
+        sleep_delta_str = f"Meta Garmin: {_fmt_hours_to_hm(sleep_target_curr)}" if sleep_target_curr else "Meta: 8h"
+        sleep_color = "normal"
+
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("VRC noturna", _fmt(hrv_curr, 0, " ms"),
-              f"Base pessoal: {_fmt(hrv_mean, 1, ' ms')}" if hrv_mean is not None else "Base ainda indisponível")
-    c2.metric("FC repouso", _fmt(rhr_curr, 0, " bpm"),
-              f"Base pessoal: {_fmt(rhr_mean, 1, ' bpm')}" if rhr_mean is not None else "Base ainda indisponível")
-    c3.metric("Sono", _fmt_hours_to_hm(sleep_hours_curr),
-              f"Score: {_fmt(sleep_curr, 0)}" if sleep_curr is not None else "Score não registado")
-    
-    target_str = _fmt_hours_to_hm(sleep_target_curr)
-    c4.metric("Défice de sono", _fmt_minutes_diff(diff_minutes),
-              f"Meta Garmin recomendada: {target_str}" if sleep_target_curr else "Meta padrão 8h")
+    c1.metric(
+        "VRC noturna",
+        _fmt(hrv_curr, 0, " ms"),
+        f"Base: {_fmt(hrv_mean, 1, ' ms')}" if hrv_mean is not None else f"[{hrv_src}]"
+    )
+    c2.metric(
+        "FC repouso",
+        _fmt(rhr_curr, 0, " bpm"),
+        rhr_delta_str,
+        delta_color=rhr_color
+    )
+    c3.metric(
+        "Sono",
+        _fmt_hours_to_hm(sleep_hours_curr),
+        f"Score: {_fmt(sleep_curr, 0)}" if sleep_curr is not None else f"[{sleep_src}]"
+    )
+    c4.metric(
+        "Défice de sono",
+        _fmt_minutes_diff(diff_minutes),
+        sleep_delta_str,
+        delta_color=sleep_color
+    )
 
     st.divider()
 
@@ -131,7 +170,7 @@ def render_today_page(base_df: pd.DataFrame, hrv_mean: Optional[float], rhr_mean
         tone_class = {"green": "apex-good", "amber": "apex-warn", "red": "apex-alert"}.get(decision["tone"], "")
         st.markdown(
             f'<div class="apex-note {tone_class}"><b>{escape(decision["headline"])}</b><br>'
-            f'<span style="font-size:1.5rem;font-weight:800">Prontidão estimada: {score}/100</span><br>'
+            f'<span style="font-size:1.5rem;font-weight:800">Prontidão estimada APEX: {score}/100</span><br>'
             f'<span class="muted">Calculada com base na linha de base local</span></div>',
             unsafe_allow_html=True,
         )
@@ -146,14 +185,15 @@ def render_today_page(base_df: pd.DataFrame, hrv_mean: Optional[float], rhr_mean
     st.write(f"**VRC:** {hrv_context['status']}. {hrv_context['explanation']}")
     if sleep_hours_curr is not None:
         dur_str = _fmt_hours_to_hm(sleep_hours_curr)
-        tgt_str = _fmt_hours_to_hm(sleep_target_curr)
+        tgt_str = _fmt_hours_to_hm(sleep_target_curr) if sleep_target_curr else "8h (padrão)"
         diff_str = _fmt_minutes_diff(diff_minutes)
-        st.write(f"Duração do sono da última noite: **{dur_str}** vs Meta recomendada Garmin: **{tgt_str}** (Défice/Excedente: **{diff_str}**).")
+        st.write(f"Duração do sono da última noite: **{dur_str}** vs Meta recomendada: **{tgt_str}** (Défice/Excedente: **{diff_str}**).")
 
     st.subheader("Qualidade e origem dos dados")
     st.write(f"Dias válidos de VRC antes de hoje: **{hrv_valid_days}**.")
     source_cols = [("VRC", "hrv_source"), ("FC repouso", "rhr_source"),
-                   ("Sono", "sleep_hours_source"), ("Score sono", "sleep_score_source")]
+                   ("Sono", "sleep_hours_source"), ("Score sono", "sleep_score_source"),
+                   ("Prontidão Garmin", "vendor_readiness_source")]
     st.table(pd.DataFrame([{"Métrica": name,
                             "Origem hoje": str(latest.get(col)) if pd.notna(latest.get(col)) else "Sem dado"}
                            for name, col in source_cols]))
