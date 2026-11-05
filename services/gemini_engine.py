@@ -8,8 +8,7 @@ import streamlit as st
 
 def generate_apex_insights(metrics_summary: Dict[str, Any], lang: str = "EN") -> str:
     """
-    Direct REST API call to Google Gemini endpoint.
-    Bypasses SDK model resolution bugs.
+    Direct REST API call to Google Gemini endpoint using the latest stable models.
     """
     api_key = os.environ.get("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", None)
     
@@ -71,8 +70,8 @@ def generate_apex_insights(metrics_summary: Dict[str, Any], lang: str = "EN") ->
         3. Clear recommendation for today's training execution.
         """
 
-    # Direct endpoint call (Tries gemini-1.5-flash first, then gemini-2.0-flash)
-    models_to_try = ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-1.5-pro"]
+    # Modelos atualizados testados em sequência
+    models_to_try = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
     
     for model_name in models_to_try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
