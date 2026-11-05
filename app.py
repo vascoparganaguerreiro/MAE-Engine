@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import zipfile
 from datetime import date, datetime, timedelta
@@ -110,39 +111,103 @@ def _garmin_sync_callback() -> None:
         st.session_state["garmin_password_input"] = ""
 
 
-def _parse_garmin_csv(df: pd.DataFrame) -> List[Dict[str, Any]]:
-    """Parser universal para relatórios exportados do Garmin Connect."""
+def _parse_garmin_file_content(file_name: str, content: bytes) -> List[Dict[str, Any]]:
+    """Parser universal para relatórios exportados do Garmin Connect (CSV e JSON GDPR)."""
     records: List[Dict[str, Any]] = []
-    df.columns = [str(c).strip().lower() for c in df.columns]
+    fname_lower = file_name.lower()
 
-    date_col = next((c for c in df.columns if "data" in c or "date" in c or "day" in c), None)
-    if not date_col:
-        return records
-
-    hrv_col = next((c for c in df.columns if "hrv" in c or "vrc" in c), None)
-    rhr_col = next((c for c in df.columns if "rhr" in c or "repouso" in c or "resting" in c), None)
-    sleep_score_col = next((c for c in df.columns if "sleep score" in c or "pontuação do sono" in c), None)
-    sleep_hours_col = next((c for c in df.columns if "sleep time" in c or "horas de sono" in c or "duration" in c), None)
-
-    for _, row in df.iterrows():
+    if fname_lower.endswith(".csv"):
         try:
-            d_val = pd.to_datetime(row[date_col]).date().isoformat()
+            df = pd.read_csv(io.BytesIO(content))
+            df.columns = [str(c).strip().lower() for c in df.columns]
+
+            date_col = next((c for c in df.columns if "data" in c or "date" in c or "day" in c), None)
+            if not date_col:
+                return records
+
+            hrv_col = next((c for c in df.columns if "hrv" in c or "vrc" in c), None)
+            rhr_col = next((c for c in df.columns if "rhr" in c or "repouso" in c or "resting" in c), None)
+            sleep_score_col = next((c for c in df.columns if "sleep score" in c or "pontuação do sono" in c), None)
+            sleep_hours_col = next((c for c in df.columns if "sleep time" in c or "horas de sono" in c or "duration" in c), None)
+
+            for _, row in df.iterrows():
+                try:
+                    d_val = pd.to_datetime(row[date_col]).date().isoformat()
+                except Exception:
+                    continue
+
+                rec: Dict[str, Any] = {"date": d_val}
+                if hrv_col and pd.notna(row[hrv_col]):
+                    rec["hrv"] = _clean_number(row[hrv_col])
+                if rhr_col and pd.notna(row[rhr_col]):
+                    rec["rhr"] = _clean_number(row[rhr_col])
+                if sleep_score_col and pd.notna(row[sleep_score_col]):
+                    rec["sleep_score"] = _clean_number(row[sleep_score_col])
+                if sleep_hours_col and pd.notna(row[sleep_hours_col]):
+                    h_val = _clean_number(row[sleep_hours_col])
+                    rec["sleep_hours"] = round(h_val / 3600.0, 2) if h_val and h_val > 24 else h_val
+
+                if len(rec) > 1:
+                    records.append(rec)
         except Exception:
-            continue
+            pass
 
-        rec: Dict[str, Any] = {"date": d_val}
-        if hrv_col and pd.notna(row[hrv_col]):
-            rec["hrv"] = _clean_number(row[hrv_col])
-        if rhr_col and pd.notna(row[rhr_col]):
-            rec["rhr"] = _clean_number(row[rhr_col])
-        if sleep_score_col and pd.notna(row[sleep_score_col]):
-            rec["sleep_score"] = _clean_number(row[sleep_score_col])
-        if sleep_hours_col and pd.notna(row[sleep_hours_col]):
-            h_val = _clean_number(row[sleep_hours_col])
-            rec["sleep_hours"] = round(h_val / 3600.0, 2) if h_val and h_val > 24 else h_val
+    elif fname_lower.endswith(".json"):
+        try:
+            data = json.loads(content.decode("utf-8", errors="ignore"))
+            if isinstance(data, dict):
+                data = [data]
 
-        if len(rec) > 1:
-            records.append(rec)
+            if isinstance(data, list):
+                for item in data:
+                    if not isinstance(item, dict):
+                        continue
+
+                    raw_date = (
+                        item.get("calendarDate")
+                        or item.get("date")
+                        or item.get("day")
+                        or item.get("userDailySleepDTO", {}).get("calendarDate")
+                    )
+                    if not raw_date:
+                        continue
+
+                    try:
+                        d_str = pd.to_datetime(raw_date).date().isoformat()
+                    except Exception:
+                        continue
+
+                    rec: Dict[str, Any] = {"date": d_str}
+
+                    # Frequência Cardíaca de Repouso (RHR)
+                    rhr_val = item.get("restingHeartRate") or item.get("rhr")
+                    if rhr_val is not None:
+                        rec["rhr"] = _clean_number(rhr_val)
+
+                    # VRC (HRV)
+                    hrv_val = item.get("lastNightAvg") or item.get("hrvSummary", {}).get("lastNightAvg")
+                    if hrv_val is not None:
+                        rec["hrv"] = _clean_number(hrv_val)
+
+                    # Sono (Horas e Score)
+                    sleep_dto = item.get("userDailySleepDTO") or item
+                    sleep_sec = sleep_dto.get("sleepTimeSeconds") or sleep_dto.get("totalSleepHours")
+                    if sleep_sec is not None:
+                        sec_num = _clean_number(sleep_sec)
+                        if sec_num:
+                            rec["sleep_hours"] = round(sec_num / 3600.0, 2) if sec_num > 24 else sec_num
+
+                    sleep_score = (
+                        sleep_dto.get("sleepScores", {}).get("overall", {}).get("value")
+                        or sleep_dto.get("overallScore")
+                    )
+                    if sleep_score is not None:
+                        rec["sleep_score"] = _clean_number(sleep_score)
+
+                    if len(rec) > 1:
+                        records.append(rec)
+        except Exception:
+            pass
 
     return records
 
@@ -202,21 +267,19 @@ with st.sidebar.expander("⚙️ Parâmetros CTL / ATL", expanded=False):
     store.set_setting("atl_tc", atl_tc)
 
 with st.sidebar.expander("📂 Importar Histórico (1 clique)", expanded=False):
-    st.caption("Carrega o ficheiro CSV ou ZIP exportado do Garmin Connect para povoar o histórico de uma só vez.")
-    uploaded_file = st.file_uploader("Ficheiro Garmin (CSV/ZIP)", type=["csv", "zip"])
+    st.caption("Carrega o ficheiro CSV, JSON ou ZIP exportado do Garmin Connect para povoar o histórico de uma só vez.")
+    uploaded_file = st.file_uploader("Ficheiro Garmin (CSV/JSON/ZIP)", type=["csv", "json", "zip"])
     if uploaded_file is not None:
         try:
             all_records: List[Dict[str, Any]] = []
-            if uploaded_file.name.endswith(".zip"):
+            if uploaded_file.name.lower().endswith(".zip"):
                 with zipfile.ZipFile(uploaded_file) as z:
                     for filename in z.namelist():
-                        if filename.endswith(".csv"):
+                        if filename.lower().endswith(".csv") or filename.lower().endswith(".json"):
                             with z.open(filename) as f:
-                                df_temp = pd.read_csv(f)
-                                all_records.extend(_parse_garmin_csv(df_temp))
+                                all_records.extend(_parse_garmin_file_content(filename, f.read()))
             else:
-                df_temp = pd.read_csv(uploaded_file)
-                all_records.extend(_parse_garmin_csv(df_temp))
+                all_records.extend(_parse_garmin_file_content(uploaded_file.name, uploaded_file.getvalue()))
 
             if all_records:
                 inserted = store.bulk_insert_garmin_history(all_records)
