@@ -44,9 +44,11 @@ def fetch_user_profile_data(client: Garmin) -> Dict[str, Any]:
     return profile_data
 
 
-def fetch_daily_metrics(email: str, password: str, target_date: date) -> Tuple[Dict[str, Any], List[str]]:
+def fetch_daily_metrics(email: str, password: str, target_date: date, fetch_history: bool = True, history_days: int = 30) -> Tuple[Dict[str, Any], List[Dict[str, Any]], List[str]]:
+    """Busca métricas diárias e histórico recente numa única autenticação."""
     warnings: List[str] = []
     metrics: Dict[str, Any] = {}
+    historical_records: List[Dict[str, Any]] = []
 
     client = Garmin(email, password)
     client.login()
@@ -57,6 +59,7 @@ def fetch_daily_metrics(email: str, password: str, target_date: date) -> Tuple[D
     if prof:
         metrics["profile_extracted"] = prof
 
+    # 1. FC de repouso de hoje
     try:
         hr_data = client.get_rhr_day(date_str)
         if isinstance(hr_data, dict):
@@ -64,6 +67,7 @@ def fetch_daily_metrics(email: str, password: str, target_date: date) -> Tuple[D
     except Exception as exc:
         warnings.append(f"Não foi possível obter FC de repouso: {exc}")
 
+    # 2. VRC (HRV) de hoje
     try:
         hrv_data = client.get_hrv_data(date_str)
         if isinstance(hrv_data, dict):
@@ -72,6 +76,7 @@ def fetch_daily_metrics(email: str, password: str, target_date: date) -> Tuple[D
     except Exception as exc:
         warnings.append(f"Não foi possível obter VRC: {exc}")
 
+    # 3. Sono de hoje
     try:
         sleep_data = client.get_sleep_data(date_str)
         if isinstance(sleep_data, dict):
@@ -87,6 +92,7 @@ def fetch_daily_metrics(email: str, password: str, target_date: date) -> Tuple[D
     except Exception as exc:
         warnings.append(f"Não foi possível obter dados de sono: {exc}")
 
+    # 4. Prontidão Garmin de hoje
     try:
         readiness_data = client.get_training_readiness(date_str)
         if isinstance(readiness_data, list) and len(readiness_data) > 0:
@@ -106,7 +112,35 @@ def fetch_daily_metrics(email: str, password: str, target_date: date) -> Tuple[D
         except Exception as exc:
             warnings.append(f"Prontidão Garmin indisponível para o dia: {exc}")
 
-    return metrics, warnings
+    # 5. Puxar histórico recente de VRC/RHR para calibrar a linha de base
+    if fetch_history:
+        end_d = date.today()
+        for i in range(history_days):
+            target_d = end_d - timedelta(days=i)
+            d_str = target_d.isoformat()
+            rec: Dict[str, Any] = {"date": d_str}
+            try:
+                h_data = client.get_hrv_data(d_str)
+                if isinstance(h_data, dict):
+                    sum_h = h_data.get("hrvSummary", {})
+                    val_h = sum_h.get("lastNightAvg") or sum_h.get("weeklyAvg")
+                    if val_h is not None:
+                        rec["hrv"] = float(val_h)
+            except Exception:
+                pass
+                
+            try:
+                r_data = client.get_rhr_day(d_str)
+                if isinstance(r_data, dict) and r_data.get("restingHeartRate"):
+                    rec["rhr"] = float(r_data["restingHeartRate"])
+            except Exception:
+                pass
+
+            if len(rec) > 1:
+                historical_records.append(rec)
+            time.sleep(0.05)
+
+    return metrics, historical_records, warnings
 
 
 def fetch_historical_metrics(email: str, password: str, days: int = 30) -> List[Dict[str, Any]]:
