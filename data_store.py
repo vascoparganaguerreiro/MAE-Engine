@@ -11,7 +11,7 @@ import os
 import sqlite3
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -127,15 +127,15 @@ def upsert_daily_metrics(day: Any, metrics: Dict[str, Any], source: str = "manua
     iso = _iso_day(day)
     valid: Dict[str, Any] = {}
     for field, value in metrics.items():
-        if field not in DAILY_FIELDS or value is None or value == "":
+        if field not in DAILY_FIELDS or value is None or str(value).strip() == "":
             continue
         low, high = DAILY_FIELDS[field]
         numeric = float(value)
         if not low <= numeric <= high:
-            raise ValueError(f"{field} must be between {low} and {high}")
+            continue
         valid[field] = int(numeric) if field in {"soreness", "stress", "mood"} else numeric
     if not valid:
-        raise ValueError("Não foi introduzida nenhuma métrica válida")
+        return
 
     now = datetime.now().isoformat(timespec="seconds")
     columns = ["date"]
@@ -156,6 +156,73 @@ def upsert_daily_metrics(day: Any, metrics: Dict[str, Any], source: str = "manua
     )
     with _connect() as conn:
         conn.execute(sql, values)
+
+
+def get_last_logged_date() -> Optional[date]:
+    """Retorna a data mais recente registada no SQLite."""
+    with _connect() as conn:
+        row = conn.execute("SELECT MAX(date) AS max_date FROM daily_metrics").fetchone()
+        if row and row["max_date"]:
+            try:
+                return date.fromisoformat(row["max_date"])
+            except ValueError:
+                return None
+    return None
+
+
+def bulk_insert_garmin_history(records: List[Dict[str, Any]], source: str = "garmin_import") -> int:
+    """Insere em lote registos lidos de um ficheiro exportado da Garmin."""
+    if not records:
+        return 0
+
+    now = datetime.now().isoformat(timespec="seconds")
+    inserted_count = 0
+
+    with _connect() as conn:
+        for rec in records:
+            day_str = rec.get("date")
+            if not day_str:
+                continue
+            try:
+                iso = _iso_day(day_str)
+            except ValueError:
+                continue
+
+            valid: Dict[str, Any] = {}
+            for field, (low, high) in DAILY_FIELDS.items():
+                val = rec.get(field)
+                if val is not None and str(val).strip() != "":
+                    try:
+                        num = float(val)
+                        if low <= num <= high:
+                            valid[field] = int(num) if field in {"soreness", "stress", "mood"} else num
+                    except (TypeError, ValueError):
+                        pass
+
+            if not valid:
+                continue
+
+            columns = ["date"]
+            values: List[Any] = [iso]
+            updates = []
+            for f_name, f_val in valid.items():
+                columns.extend([f_name, f"{f_name}_source"])
+                values.extend([f_val, source])
+                updates.extend([
+                    f"{f_name}=excluded.{f_name}",
+                    f"{f_name}_source=excluded.{f_name}_source",
+                ])
+            columns.append("updated_at")
+            values.append(now)
+
+            sql = (
+                f"INSERT INTO daily_metrics ({','.join(columns)}) VALUES ({','.join(['?'] * len(columns))}) "
+                f"ON CONFLICT(date) DO UPDATE SET {','.join(updates)}, updated_at=excluded.updated_at"
+            )
+            conn.execute(sql, values)
+            inserted_count += 1
+
+    return inserted_count
 
 
 def fetch_daily_metrics(start: Any, end: Any) -> pd.DataFrame:
@@ -298,7 +365,7 @@ def add_race(name: str, race_day: Any, dist_km: float, priority: str, event_type
 
 def fetch_races() -> pd.DataFrame:
     with _connect() as conn:
-        rows = conn.execute("SELECT * FROM races ORDER BY race_date,priority",).fetchall()
+        rows = conn.execute("SELECT * FROM races ORDER BY race_date,priority").fetchall()
     return pd.DataFrame([dict(row) for row in rows])
 
 
@@ -314,7 +381,7 @@ def add_shoe(model: str, max_km: float) -> None:
 
 def fetch_shoes() -> pd.DataFrame:
     with _connect() as conn:
-        rows = conn.execute("SELECT * FROM shoes ORDER BY model",).fetchall()
+        rows = conn.execute("SELECT * FROM shoes ORDER BY model").fetchall()
     return pd.DataFrame([dict(row) for row in rows])
 
 
