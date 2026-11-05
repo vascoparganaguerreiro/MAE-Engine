@@ -45,7 +45,6 @@ def fetch_user_profile_data(client: Garmin) -> Dict[str, Any]:
 
 
 def fetch_daily_metrics(email: str, password: str, target_date: date, fetch_history: bool = True, history_days: int = 30) -> Tuple[Dict[str, Any], List[Dict[str, Any]], List[str]]:
-    """Busca métricas diárias e histórico recente numa única autenticação."""
     warnings: List[str] = []
     metrics: Dict[str, Any] = {}
     historical_records: List[Dict[str, Any]] = []
@@ -59,7 +58,7 @@ def fetch_daily_metrics(email: str, password: str, target_date: date, fetch_hist
     if prof:
         metrics["profile_extracted"] = prof
 
-    # 1. FC de repouso de hoje
+    # 1. FC de repouso
     try:
         hr_data = client.get_rhr_day(date_str)
         if isinstance(hr_data, dict):
@@ -67,16 +66,18 @@ def fetch_daily_metrics(email: str, password: str, target_date: date, fetch_hist
     except Exception as exc:
         warnings.append(f"Não foi possível obter FC de repouso: {exc}")
 
-    # 2. VRC (HRV) de hoje
+    # 2. VRC noturna e Média de 7 dias da Garmin Connect
     try:
         hrv_data = client.get_hrv_data(date_str)
         if isinstance(hrv_data, dict):
             summary = hrv_data.get("hrvSummary", {})
             metrics["hrv"] = summary.get("lastNightAvg") or summary.get("weeklyAvg")
+            if summary.get("weeklyAvg") is not None:
+                metrics["hrv_weekly_avg"] = float(summary.get("weeklyAvg"))
     except Exception as exc:
         warnings.append(f"Não foi possível obter VRC: {exc}")
 
-    # 3. Sono de hoje
+    # 3. Sono e Meta Dinâmica
     try:
         sleep_data = client.get_sleep_data(date_str)
         if isinstance(sleep_data, dict):
@@ -92,16 +93,17 @@ def fetch_daily_metrics(email: str, password: str, target_date: date, fetch_hist
     except Exception as exc:
         warnings.append(f"Não foi possível obter dados de sono: {exc}")
 
-    # 4. Prontidão Garmin de hoje
+    # 4. Prontidão Garmin Dinâmica (Força a obtenção da medição mais recente pós-treino)
     try:
         readiness_data = client.get_training_readiness(date_str)
         if isinstance(readiness_data, list) and len(readiness_data) > 0:
-            last_entry = readiness_data[-1]
-            val = last_entry.get("score") or last_entry.get("scoreValue")
+            sorted_entries = sorted(readiness_data, key=lambda x: str(x.get("timestamp") or x.get("date") or ""))
+            latest_entry = sorted_entries[-1]
+            val = latest_entry.get("score") or latest_entry.get("scoreValue") or latest_entry.get("value")
             if val is not None:
                 metrics["vendor_readiness"] = float(val)
         elif isinstance(readiness_data, dict):
-            val = readiness_data.get("score") or readiness_data.get("scoreValue")
+            val = readiness_data.get("score") or readiness_data.get("scoreValue") or readiness_data.get("value")
             if val is not None:
                 metrics["vendor_readiness"] = float(val)
     except Exception:
@@ -112,7 +114,7 @@ def fetch_daily_metrics(email: str, password: str, target_date: date, fetch_hist
         except Exception as exc:
             warnings.append(f"Prontidão Garmin indisponível para o dia: {exc}")
 
-    # 5. Puxar histórico recente de VRC/RHR para calibrar a linha de base
+    # 5. Histórico recente de 30 dias
     if fetch_history:
         end_d = date.today()
         for i in range(history_days):
