@@ -58,17 +58,31 @@ def fetch_daily_metrics(email: str, password: str, target_date: date, fetch_hist
     if prof:
         metrics["profile_extracted"] = prof
 
-    # 1. FC de repouso (Tratamento robusto para número ou dicionário)
+    # 1. FC de repouso (Extração resiliente multiformato)
+    rhr_found = None
     try:
         hr_data = client.get_rhr_day(date_str)
         if isinstance(hr_data, dict):
-            rhr_val = hr_data.get("restingHeartRate")
-            if isinstance(rhr_val, dict):
-                rhr_val = rhr_val.get("value")
-            if rhr_val is not None:
-                metrics["rhr"] = float(rhr_val)
+            rhr_found = hr_data.get("restingHeartRate") or hr_data.get("allDayRestingHeartRate")
+            if isinstance(rhr_found, dict):
+                rhr_found = rhr_found.get("value")
         elif isinstance(hr_data, (int, float)):
-            metrics["rhr"] = float(hr_data)
+            rhr_found = float(hr_data)
+
+        # Fallback 1: Estatísticas gerais diárias
+        if rhr_found is None:
+            stats = client.get_stats(date_str)
+            if isinstance(stats, dict):
+                rhr_found = stats.get("restingHeartRate") or stats.get("minHeartRate")
+
+        # Fallback 2: Dados detalhados de ritmo cardíaco
+        if rhr_found is None:
+            heart_data = client.get_heart_rates(date_str)
+            if isinstance(heart_data, dict):
+                rhr_found = heart_data.get("restingHeartRate")
+
+        if rhr_found is not None:
+            metrics["rhr"] = float(rhr_found)
     except Exception as exc:
         warnings.append(f"Não foi possível obter FC de repouso: {exc}")
 
@@ -83,23 +97,20 @@ def fetch_daily_metrics(email: str, password: str, target_date: date, fetch_hist
     except Exception as exc:
         warnings.append(f"Não foi possível obter VRC: {exc}")
 
-    # 3. Sono e Meta Dinâmica (Tratamento imune ao erro float(dict))
+    # 3. Sono e Meta Dinâmica
     try:
         sleep_data = client.get_sleep_data(date_str)
         if isinstance(sleep_data, dict):
             dto = sleep_data.get("dailySleepDTO", {})
             
-            # Score de sono
             sleep_score_val = dto.get("sleepScores", {}).get("overall", {}).get("value") or dto.get("sleepQualityScoreValue")
             if sleep_score_val is not None:
                 metrics["sleep_score"] = float(sleep_score_val)
 
-            # Horas de sono
             sec = dto.get("sleepTimeSeconds")
             if sec:
                 metrics["sleep_hours"] = round(float(sec) / 3600.0, 2)
             
-            # Meta de sono (Extrai float quer seja número ou dict)
             sleep_need_raw = dto.get("sleepNeed") or dto.get("sleepNeedMinutes")
             if isinstance(sleep_need_raw, dict):
                 sleep_need_val = sleep_need_raw.get("value") or sleep_need_raw.get("sleepNeedMinutes")
@@ -153,15 +164,22 @@ def fetch_daily_metrics(email: str, password: str, target_date: date, fetch_hist
                 pass
                 
             try:
+                r_found = None
                 r_data = client.get_rhr_day(d_str)
                 if isinstance(r_data, dict):
-                    r_val = r_data.get("restingHeartRate")
-                    if isinstance(r_val, dict):
-                        r_val = r_val.get("value")
-                    if r_val is not None:
-                        rec["rhr"] = float(r_val)
+                    r_found = r_data.get("restingHeartRate") or r_data.get("allDayRestingHeartRate")
+                    if isinstance(r_found, dict):
+                        r_found = r_found.get("value")
                 elif isinstance(r_data, (int, float)):
-                    rec["rhr"] = float(r_data)
+                    r_found = float(r_data)
+                
+                if r_found is None:
+                    st_data = client.get_stats(d_str)
+                    if isinstance(st_data, dict):
+                        r_found = st_data.get("restingHeartRate")
+
+                if r_found is not None:
+                    rec["rhr"] = float(r_found)
             except Exception:
                 pass
 
@@ -170,40 +188,3 @@ def fetch_daily_metrics(email: str, password: str, target_date: date, fetch_hist
             time.sleep(0.05)
 
     return metrics, historical_records, warnings
-
-
-def fetch_historical_metrics(email: str, password: str, days: int = 30) -> List[Dict[str, Any]]:
-    client = Garmin(email, password)
-    client.login()
-    
-    end_d = date.today()
-    records: List[Dict[str, Any]] = []
-
-    for i in range(days):
-        target_d = end_d - timedelta(days=i)
-        d_str = target_d.isoformat()
-        rec: Dict[str, Any] = {"date": d_str}
-        
-        try:
-            hrv_data = client.get_hrv_data(d_str)
-            if isinstance(hrv_data, dict):
-                summary = hrv_data.get("hrvSummary", {})
-                val = summary.get("lastNightAvg") or summary.get("weeklyAvg")
-                if val is not None:
-                    rec["hrv"] = float(val)
-        except Exception:
-            pass
-            
-        try:
-            hr_data = client.get_rhr_day(d_str)
-            if isinstance(hr_data, dict) and hr_data.get("restingHeartRate"):
-                rec["rhr"] = float(hr_data["restingHeartRate"])
-        except Exception:
-            pass
-
-        if len(rec) > 1:
-            records.append(rec)
-            
-        time.sleep(0.1)
-
-    return records
