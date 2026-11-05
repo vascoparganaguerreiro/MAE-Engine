@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import os
 from typing import Dict, Any
-import requests
+import google.generativeai as genai
 import streamlit as st
 
 
 def generate_apex_insights(metrics_summary: Dict[str, Any], lang: str = "EN") -> str:
     """
-    Direct REST API call to Google Gemini endpoint using the latest stable models.
+    Generates cross-pillar biological coaching using the official google-generativeai SDK.
     """
     api_key = os.environ.get("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", None)
     
@@ -23,72 +23,61 @@ def generate_apex_insights(metrics_summary: Dict[str, Any], lang: str = "EN") ->
             "in Streamlit Secrets to enable dynamic AI biological synthesis."
         )
 
-    system_instruction = (
-        "You are APEX AI Engine, an elite sports scientist and endurance coach for high-performance athletes. "
-        "Your job is to analyze cross-pillar physiological data (HRV, RHR, Sleep, Load, DOMS, Respiration) "
-        "and provide concise, actionable, evidence-based biological interpretations. "
-        "STRICT RULE: Never invent measurements, never overrule raw data, and never provide medical diagnoses."
-    )
+    try:
+        genai.configure(api_key=api_key)
+        
+        # Usar o modelo padrão estável do Google AI Studio
+        model = genai.GenerativeModel("gemini-1.5-flash")
 
-    language_context = "Respond strictly in Portuguese (Portugal)." if lang == "PT" else "Respond strictly in English."
+        system_instruction = (
+            "You are APEX AI Engine, an elite sports scientist and endurance coach for high-performance athletes. "
+            "Your job is to analyze cross-pillar physiological data (HRV, RHR, Sleep, Load, DOMS, Respiration) "
+            "and provide concise, actionable, evidence-based biological interpretations. "
+            "STRICT RULE: Never invent measurements, never overrule raw data, and never provide medical diagnoses."
+        )
 
-    user_question = metrics_summary.get("user_question")
-    if user_question:
-        prompt = f"""
-        {system_instruction}
-        {language_context}
+        language_context = "Respond strictly in Portuguese (Portugal)." if lang == "PT" else "Respond strictly in English."
 
-        ATHLETE PHYSIOLOGICAL CONTEXT TODAY:
-        - Nightly HRV: {metrics_summary.get('hrv')} ms (Z-Score: {metrics_summary.get('z_vrc', 0):+.1f} σ)
-        - Resting HR: {metrics_summary.get('rhr')} bpm (Baseline: {metrics_summary.get('rhr_base')} bpm)
-        - Sleep Duration: {metrics_summary.get('sleep_hours')} hours (Score: {metrics_summary.get('sleep_score')}/100)
-        - Workload (CTL / ATL / TSB): {metrics_summary.get('ctl')} / {metrics_summary.get('atl')} / {metrics_summary.get('tsb')}
-        - Soreness (DOMS): {metrics_summary.get('soreness')}/5 | Fatigue: {metrics_summary.get('fatigue')}/5
-        - Readiness Score: {metrics_summary.get('readiness')}/100
+        user_question = metrics_summary.get("user_question")
+        if user_question:
+            prompt = f"""
+            {system_instruction}
+            {language_context}
 
-        ATHLETE QUESTION:
-        "{user_question}"
+            ATHLETE PHYSIOLOGICAL CONTEXT TODAY:
+            - Nightly HRV: {metrics_summary.get('hrv')} ms (Z-Score: {metrics_summary.get('z_vrc', 0):+.1f} σ)
+            - Resting HR: {metrics_summary.get('rhr')} bpm (Baseline: {metrics_summary.get('rhr_base')} bpm)
+            - Sleep Duration: {metrics_summary.get('sleep_hours')} hours (Score: {metrics_summary.get('sleep_score')}/100)
+            - Workload (CTL / ATL / TSB): {metrics_summary.get('ctl')} / {metrics_summary.get('atl')} / {metrics_summary.get('tsb')}
+            - Soreness (DOMS): {metrics_summary.get('soreness')}/5 | Fatigue: {metrics_summary.get('fatigue')}/5
+            - Readiness Score: {metrics_summary.get('readiness')}/100
 
-        Answer the athlete's question concisely based on their current physiological metrics.
-        """
-    else:
-        prompt = f"""
-        {system_instruction}
-        {language_context}
+            ATHLETE QUESTION:
+            "{user_question}"
 
-        ATHLETE PHYSIOLOGICAL STATE:
-        - Nightly HRV: {metrics_summary.get('hrv')} ms (Z-Score: {metrics_summary.get('z_vrc', 0):+.1f} σ)
-        - Resting HR: {metrics_summary.get('rhr')} bpm (Baseline: {metrics_summary.get('rhr_base')} bpm)
-        - Sleep Duration: {metrics_summary.get('sleep_hours')} hours (Score: {metrics_summary.get('sleep_score')}/100)
-        - Workload (CTL / ATL / TSB): {metrics_summary.get('ctl')} / {metrics_summary.get('atl')} / {metrics_summary.get('tsb')}
-        - Soreness (DOMS): {metrics_summary.get('soreness')}/5 | Fatigue: {metrics_summary.get('fatigue')}/5
-        - Readiness Score: {metrics_summary.get('readiness')}/100
+            Answer the athlete's question concisely based on their current physiological metrics.
+            """
+        else:
+            prompt = f"""
+            {system_instruction}
+            {language_context}
 
-        Deliver a 3-sentence executive analysis:
-        1. Autonomic & recovery readiness status.
-        2. Adaptative response to acute/chronic load.
-        3. Clear recommendation for today's training execution.
-        """
+            ATHLETE PHYSIOLOGICAL STATE:
+            - Nightly HRV: {metrics_summary.get('hrv')} ms (Z-Score: {metrics_summary.get('z_vrc', 0):+.1f} σ)
+            - Resting HR: {metrics_summary.get('rhr')} bpm (Baseline: {metrics_summary.get('rhr_base')} bpm)
+            - Sleep Duration: {metrics_summary.get('sleep_hours')} hours (Score: {metrics_summary.get('sleep_score')}/100)
+            - Workload (CTL / ATL / TSB): {metrics_summary.get('ctl')} / {metrics_summary.get('atl')} / {metrics_summary.get('tsb')}
+            - Soreness (DOMS): {metrics_summary.get('soreness')}/5 | Fatigue: {metrics_summary.get('fatigue')}/5
+            - Readiness Score: {metrics_summary.get('readiness')}/100
 
-    # Modelos atualizados testados em sequência
-    models_to_try = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
-    
-    for model_name in models_to_try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
-        headers = {"Content-Type": "application/json"}
-        payload = {
-            "contents": [{
-                "parts": [{"text": prompt}]
-            }]
-        }
+            Deliver a 3-sentence executive analysis:
+            1. Autonomic & recovery readiness status.
+            2. Adaptative response to acute/chronic load.
+            3. Clear recommendation for today's training execution.
+            """
 
-        try:
-            res = requests.post(url, json=payload, headers=headers, timeout=10)
-            if res.status_code == 200:
-                data = res.json()
-                text = data["candidates"][0]["content"]["parts"][0]["text"]
-                return text.strip()
-        except Exception:
-            continue
+        response = model.generate_content(prompt)
+        return response.text.strip()
 
-    return "APEX Intelligence Engine Error: Unable to query Gemini models. Check API Key permissions in Google AI Studio."
+    except Exception as e:
+        return f"APEX Intelligence Engine Error: {str(e)}"
