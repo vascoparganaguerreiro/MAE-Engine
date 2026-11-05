@@ -1,7 +1,8 @@
-"""Best-effort adapter for python-garminconnect with multi-day history backfill."""
+"""Best-effort adapter for python-garminconnect with smart historical backfill."""
 
 from __future__ import annotations
 
+import time
 from datetime import date, timedelta
 from tempfile import TemporaryDirectory
 from typing import Any, Dict, List, Optional, Tuple
@@ -67,21 +68,28 @@ def _extract_readiness(data: Any) -> Optional[float]:
 def fetch_daily_metrics(
     email: str, password: str, target_date: Optional[date] = None
 ) -> Tuple[Dict[str, Optional[float]], List[str]]:
-    """Log in and collect wellness data for target_date and historical backfill (last 14 days)."""
+    """Log in and collect wellness data for target_date with smart historical backfill."""
     email = str(email or "").strip()
     password = str(password or "")
     if not email or not password:
         raise ValueError("Introduz o e-mail e a palavra-passe Garmin.")
 
-    base_date = target_date or date.today()
+    today = target_date or date.today()
     warnings: List[str] = []
-    
+
+    # Verificar qual foi a última data guardada no SQLite para calcular a falha
+    import data_store
+    last_logged = data_store.get_last_logged_date()
+
+    if last_logged is not None and last_logged < today:
+        days_to_fetch = (today - last_logged).days
+        days_to_fetch = min(days_to_fetch, 14)  # Limite máximo de segurança de 14 dias
+    else:
+        days_to_fetch = 1  # Apenas hoje
+
     target_result: Dict[str, Optional[float]] = {
-        "hrv": None,
-        "rhr": None,
-        "sleep_score": None,
-        "sleep_hours": None,
-        "vendor_readiness": None,
+        "hrv": None, "rhr": None, "sleep_score": None,
+        "sleep_hours": None, "vendor_readiness": None,
     }
 
     with TemporaryDirectory(prefix="apex-garmin-") as token_dir:
@@ -90,16 +98,14 @@ def fetch_daily_metrics(
         if isinstance(login_result, tuple) and login_result[0] == "needs_mfa":
             raise RuntimeError("A Garmin account MFA challenge is required; MFA completion is not yet implemented in this UI.")
 
-        for i in range(13, -1, -1):
-            current_day = base_date - timedelta(days=i)
+        # Percorre desde a data mais antiga em falta até hoje
+        for i in range(days_to_fetch - 1, -1, -1):
+            current_day = today - timedelta(days=i)
             day_str = current_day.isoformat()
 
             day_metrics: Dict[str, Optional[float]] = {
-                "hrv": None,
-                "rhr": None,
-                "sleep_score": None,
-                "sleep_hours": None,
-                "vendor_readiness": None,
+                "hrv": None, "rhr": None, "sleep_score": None,
+                "sleep_hours": None, "vendor_readiness": None,
             }
 
             calls = [
@@ -122,22 +128,16 @@ def fetch_daily_metrics(
                 except Exception:
                     pass
 
-            if current_day == base_date:
+            if current_day == today:
                 target_result = day_metrics
 
-            try:
-                import data_store
-                store = data_store.get_store()
-                store.save_daily_entry(
-                    entry_date=day_str,
-                    hrv=day_metrics.get("hrv"),
-                    rhr=day_metrics.get("rhr"),
-                    sleep_score=day_metrics.get("sleep_score"),
-                    sleep_hours=day_metrics.get("sleep_hours"),
-                    vendor_readiness=day_metrics.get("vendor_readiness"),
-                )
-            except Exception:
-                pass
+            # Guarda o dia obtido na base de dados SQLite
+            if any(v is not None for v in day_metrics.values()):
+                data_store.upsert_daily_metrics(current_day, day_metrics, source="garmin")
+
+            # Pausa ligeira entre dias para evitar bloqueios de taxa (rate limiting) da Garmin
+            if days_to_fetch > 1 and i > 0:
+                time.sleep(0.5)
 
     if all(value is None for value in target_result.values()):
         warnings.append("A autenticação foi feita, mas não foram recebidas métricas para o dia de hoje.")
