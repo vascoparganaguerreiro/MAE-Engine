@@ -1,12 +1,8 @@
-"""Best-effort adapter for python-garminconnect.
+""""Best-effort adapter for python-garminconnect with multi-day history backfill."""
 
-Garmin Connect is accessed through an unofficial third-party library here.
-Credentials are accepted for one sync call and are never written to disk or SQLite.
-Missing API values remain None; there are no fallback physiological values.
-"""
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from tempfile import TemporaryDirectory
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -35,14 +31,17 @@ def _nested_number(data: Any, keys: tuple[str, ...]) -> Optional[float]:
 
 
 def _extract_sleep(data: Any) -> Dict[str, Optional[float]]:
-    dto = data.get("dailySleepDTO", data) if isinstance(data, dict) else {}
-    if not isinstance(dto, dict):
-        dto = {}
-    seconds = _number(dto.get("sleepTimeSeconds"))
-    hours = seconds / 3600 if seconds is not None else None
-    score_block = dto.get("sleepScores") or {}
-    overall = score_block.get("overall") or {} if isinstance(score_block, dict) else {}
-    score = _nested_number(overall, ("value", "score"))
+    if not isinstance(data, dict):
+        return {"sleep_hours": None, "sleep_score": None}
+
+    daily = data.get("dailySleepDTO") or data
+    seconds = _nested_number(daily, ("sleepTimeSeconds", "totalSleepHours"))
+    hours = round(seconds / 3600.0, 2) if seconds is not None and seconds > 0 else None
+
+    score = _nested_number(daily, ("sleepScores", "overall", "value"))
+    if score is None:
+        score = _nested_number(data.get("sleepScores"), ("overall", "value"))
+
     return {"sleep_hours": hours, "sleep_score": score}
 
 
@@ -65,52 +64,86 @@ def _extract_readiness(data: Any) -> Optional[float]:
     return _nested_number(data, ("score", "trainingReadinessScore", "readinessScore"))
 
 
-def fetch_daily_metrics(email: str, password: str, target_date: Optional[date] = None
-                        ) -> Tuple[Dict[str, Optional[float]], List[str]]:
-    """Log in and collect today's available wellness data. Raises for login failure."""
+def fetch_daily_metrics(
+    email: str, password: str, target_date: Optional[date] = None
+) -> Tuple[Dict[str, Optional[float]], List[str]]:
+    """"Log in and collect wellness data for target_date and historical backfill (last 14 days).""""
     email = str(email or "").strip()
     password = str(password or "")
     if not email or not password:
         raise ValueError("Introduz o e-mail e a palavra-passe Garmin.")
 
-    day = (target_date or date.today()).isoformat()
-    # Keep the library's refresh token in a short-lived private directory. The
-    # library otherwise defaults to a persistent token store under the home folder.
+    base_date = target_date or date.today()
+    warnings: List[str] = []
+    
+    # Dicionário do dia alvo que o app.py vai receber de retorno direto
+    target_result: Dict[str, Optional[float]] = {
+        "hrv": None,
+        "rhr": None,
+        "sleep_score": None,
+        "sleep_hours": None,
+        "vendor_readiness": None,
+    }
+
     with TemporaryDirectory(prefix="apex-garmin-") as token_dir:
         client = Garmin(email, password, return_on_mfa=True)
         login_result = client.login(token_dir)
-        if isinstance(login_result, tuple) and login_result and login_result[0] == "needs_mfa":
+        if isinstance(login_result, tuple) and login_result[0] == "needs_mfa":
             raise RuntimeError("A Garmin account MFA challenge is required; MFA completion is not yet implemented in this UI.")
-        return _fetch_after_login(client, day)
 
+        # Sincroniza os últimos 14 dias (incluindo o dia alvo)
+        for i in range(13, -1, -1):
+            current_day = base_date - timedelta(days=i)
+            day_str = current_day.isoformat()
 
-def _fetch_after_login(client: Garmin, day: str) -> Tuple[Dict[str, Optional[float]], List[str]]:
-    result: Dict[str, Optional[float]] = {
-        "hrv": None, "rhr": None, "sleep_score": None,
-        "sleep_hours": None, "vendor_readiness": None,
-    }
-    warnings: List[str] = []
+            day_metrics: Dict[str, Optional[float]] = {
+                "hrv": None,
+                "rhr": None,
+                "sleep_score": None,
+                "sleep_hours": None,
+                "vendor_readiness": None,
+            }
 
-    calls = [
-        ("sono", "get_sleep_data", _extract_sleep),
-        ("frequência cardíaca de repouso", "get_rhr_day", lambda d: {"rhr": _extract_rhr(d)}),
-        ("VRC", "get_hrv_data", lambda d: {"hrv": _extract_hrv(d)}),
-        ("prontidão Garmin", "get_training_readiness", lambda d: {"vendor_readiness": _extract_readiness(d)}),
-    ]
-    for label, method_name, parser in calls:
-        method = getattr(client, method_name, None)
-        if method is None:
-            warnings.append(f"A biblioteca não disponibilizou o endpoint de {label}.")
-            continue
-        try:
-            payload = method(day)
-            parsed = parser(payload)
-            for key, value in parsed.items():
-                if value is not None:
-                    result[key] = value
-        except Exception as exc:  # one unavailable endpoint should not discard other metrics
-            warnings.append(f"Não foi possível obter {label} ({type(exc).__name__}).")
+            calls = [
+                ("sono", "get_sleep_data", _extract_sleep),
+                ("frequência cardíaca de repouso", "get_rhr_day", lambda d: {"rhr": _extract_rhr(d)}),
+                ("VRC", "get_hrv_data", lambda d: {"hrv": _extract_hrv(d)}),
+                ("prontidão Garmin", "get_training_readiness", lambda d: {"vendor_readiness": _extract_readiness(d)}),
+            ]
 
-    if all(value is None for value in result.values()):
-        warnings.append("A autenticação foi feita, mas não foram recebidas métricas para esta data.")
-    return result, warnings
+            for label, method_name, parser in calls:
+                method = getattr(client, method_name, None)
+                if method is None:
+                    continue
+                try:
+                    payload = method(day_str)
+                    parsed = parser(payload)
+                    for key, value in parsed.items():
+                        if value is not None:
+                            day_metrics[key] = value
+                except Exception:
+                    pass
+
+            # Se for o dia alvo final, guarda para o retorno principal da função
+            if current_day == base_date:
+                target_result = day_metrics
+
+            # Guarda também na base de dados SQLite local se a store estiver disponível
+            try:
+                import data_store
+                store = data_store.get_store()
+                store.save_daily_entry(
+                    entry_date=day_str,
+                    hrv=day_metrics.get("hrv"),
+                    rhr=day_metrics.get("rhr"),
+                    sleep_score=day_metrics.get("sleep_score"),
+                    sleep_hours=day_metrics.get("sleep_hours"),
+                    vendor_readiness=day_metrics.get("vendor_readiness"),
+                )
+            except Exception:
+                pass
+
+    if all(value is None for value in target_result.values()):
+        warnings.append("A autenticação foi feita, mas não foram recebidas métricas para o dia de hoje.")
+
+    return target_result, warnings
