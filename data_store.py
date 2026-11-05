@@ -59,15 +59,16 @@ def init_db():
             );
         """)
 
-        # Migração automática de colunas
+        # Migração de schema segura e tolerante a falhas
         cursor.execute("PRAGMA table_info(daily_metrics);")
         columns = [row["name"] for row in cursor.fetchall()]
-        if "sleep_target_hours" not in columns:
-            cursor.execute("ALTER TABLE daily_metrics ADD COLUMN sleep_target_hours REAL;")
-        if "hrv_weekly_avg" not in columns:
-            cursor.execute("ALTER TABLE daily_metrics ADD COLUMN hrv_weekly_avg REAL;")
-        if "vendor_readiness_source" not in columns:
-            cursor.execute("ALTER TABLE daily_metrics ADD COLUMN vendor_readiness_source TEXT;")
+        
+        for col_name in ["sleep_target_hours", "hrv_weekly_avg", "vendor_readiness_source"]:
+            if col_name not in columns:
+                try:
+                    cursor.execute(f"ALTER TABLE daily_metrics ADD COLUMN {col_name} REAL;")
+                except Exception:
+                    pass
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS training_days (
