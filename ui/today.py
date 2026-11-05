@@ -233,7 +233,7 @@ def render_today_page(base_df: pd.DataFrame, hrv_mean: Optional[float], rhr_mean
     st.markdown("<br>", unsafe_allow_html=True)
 
     # -------------------------------------------------------------------------
-    # LEVEL 4: APEX INTELLIGENCE LAYER (GEMINI AI ENGINE)
+    # LEVEL 4: APEX INTELLIGENCE LAYER & LIVE GEMINI CHAT
     # -------------------------------------------------------------------------
     st.markdown("## 🧠 APEX Intelligence — What Your Body Is Telling You" if not is_pt else "## 🧠 APEX Intelligence — O Que o Teu Corpo Está a Dizer")
     st.caption("Cross-pillar physiological signals combined with deterministic rules and Gemini AI biological synthesis." if not is_pt else "Cruzamento holístico de sinais fisiológicos com regras determinísticas e síntese biológica do Gemini AI.")
@@ -285,3 +285,35 @@ def render_today_page(base_df: pd.DataFrame, hrv_mean: Optional[float], rhr_mean
         """,
         unsafe_allow_html=True
     )
+
+    # -------------------------------------------------------------------------
+    # CHAT INTERATIVO GEMINI (COM BASE NOS DADOS DO DIA)
+    # -------------------------------------------------------------------------
+    st.markdown("### 💬 Ask APEX AI Coach" if not is_pt else "### 💬 Perguntar ao APEX AI Coach")
+    st.caption("Ask questions about today's workout adjustments, nutrition, or recovery based on your live metrics." if not is_pt else "Faz perguntas sobre ajustes de treino, nutrição ou recuperação com base nos teus dados fisiológicos de hoje.")
+
+    # Inicializar histórico do chat na sessão
+    if "chat_messages" not in st.session_state:
+        st.session_state["chat_messages"] = []
+
+    # Exibir histórico de mensagens do chat
+    for message in st.session_state["chat_messages"]:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+    # Entrada de texto do utilizador
+    prompt_placeholder = "Ask about today's workout or nutrition (e.g. Can I do heavy squats today?)..." if not is_pt else "Pergunta sobre o treino de hoje ou nutrição (ex: Posso fazer agachamento pesado hoje?)..."
+    if user_prompt := st.chat_input(prompt_placeholder):
+        # Guardar e mostrar a mensagem do utilizador
+        st.session_state["chat_messages"].append({"role": "user", "content": user_prompt})
+        with st.chat_message("user"):
+            st.markdown(user_prompt)
+
+        # Gerar resposta com o Gemini considerando a pergunta + dados biológicos
+        with st.chat_message("assistant"):
+            with st.spinner("Analyzing physiological state..." if not is_pt else "A analisar dados fisiológicos..."):
+                # Junta a pergunta do utilizador às métricas diárias
+                chat_context = {**metrics_summary, "user_question": user_prompt}
+                ai_response = generate_apex_insights(chat_context, lang=new_lang)
+                st.markdown(ai_response)
+                st.session_state["chat_messages"].append({"role": "assistant", "content": ai_response})
