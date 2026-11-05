@@ -111,32 +111,37 @@ def render_today_page(base_df: pd.DataFrame, hrv_mean: Optional[float], rhr_mean
 
     # --- CÁLCULO DE CORES FISIOLÓGICAS ---
     
-    # 1. VRC (Análise por Desvio Padrão Z-Score)
+    # 1. VRC (Prioriza Média de 7d da Garmin Connect se disponível)
+    garmin_weekly_avg = latest.get("hrv_weekly_avg") if pd.notna(latest.get("hrv_weekly_avg")) else None
+    effective_vrc_base = garmin_weekly_avg if garmin_weekly_avg is not None else hrv_mean
+    
     hrv_sd = base_df["HRV"].tail(30).std() if len(base_df["HRV"].dropna()) >= 7 else 5.0
     if pd.isna(hrv_sd) or hrv_sd == 0:
         hrv_sd = 5.0
+
+    if hrv_curr is not None and effective_vrc_base is not None:
+        z_vrc = (hrv_curr - effective_vrc_base) / hrv_sd
+        base_label_type = "Média 7d Garmin" if garmin_weekly_avg is not None else "Base pessoal"
+        hrv_badge_txt = f"{base_label_type}: {effective_vrc_base:.0f} ms (Z: {z_vrc:+.1f})"
         
-    if hrv_curr is not None and hrv_mean is not None:
-        z_vrc = (hrv_curr - hrv_mean) / hrv_sd
-        hrv_badge_txt = f"Base: {hrv_mean:.1f} ms (Z: {z_vrc:+.1f})"
         if abs(z_vrc) <= 1.0:
             hrv_badge_bg = "rgba(16, 185, 129, 0.2)"   # Verde (Normal)
             hrv_badge_color = "#34d399"
         elif 1.0 < z_vrc <= 1.5:
-            hrv_badge_bg = "rgba(234, 179, 8, 0.2)"    # Amarelo Esverdeado (Elevada)
+            hrv_badge_bg = "rgba(234, 179, 8, 0.2)"    # Amarelo
             hrv_badge_color = "#facc15"
         elif -1.5 <= z_vrc < -1.0:
-            hrv_badge_bg = "rgba(249, 115, 22, 0.2)"   # Laranja (Moderadamente Baixa)
+            hrv_badge_bg = "rgba(249, 115, 22, 0.2)"   # Laranja
             hrv_badge_color = "#fb923c"
         else:
-            hrv_badge_bg = "rgba(239, 68, 68, 0.2)"    # Vermelho (Desvio Acentuado)
+            hrv_badge_bg = "rgba(239, 68, 68, 0.2)"    # Vermelho
             hrv_badge_color = "#f87171"
     else:
         hrv_badge_txt = f"Base: {_fmt(hrv_mean, 1, ' ms')}" if hrv_mean is not None else f"[{hrv_src}]"
         hrv_badge_bg = "rgba(148, 163, 184, 0.15)"
         hrv_badge_color = "#94a3b8"
 
-    # 2. FC de Repouso (Subida = Laranja/Vermelho dependendo da magnitude)
+    # 2. FC de Repouso (Subida acima da base = Laranja/Vermelho)
     if rhr_curr is not None and rhr_mean is not None:
         rhr_diff = rhr_curr - rhr_mean
         rhr_badge_txt = f"{rhr_diff:+.1f} bpm vs base ({rhr_mean:.1f})"
@@ -174,7 +179,7 @@ def render_today_page(base_df: pd.DataFrame, hrv_mean: Optional[float], rhr_mean
         diff_badge_bg = "rgba(148, 163, 184, 0.15)"
         diff_badge_color = "#94a3b8"
 
-    # --- RENDERIZAÇÃO DOS CARTÕES COM STYLED BADGES ---
+    # --- RENDERIZAÇÃO DOS CARTÕES ---
     c1, c2, c3, c4 = st.columns(4)
 
     with c1:
