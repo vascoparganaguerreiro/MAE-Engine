@@ -93,7 +93,7 @@ def fetch_daily_metrics(email: str, password: str, target_date: date, fetch_hist
     except Exception as exc:
         warnings.append(f"Não foi possível obter dados de sono: {exc}")
 
-    # 4. Prontidão Garmin Dinâmica (Força a obtenção da medição mais recente pós-treino)
+    # 4. Prontidão Garmin Dinâmica (Métrica em tempo real pós-treino)
     try:
         readiness_data = client.get_training_readiness(date_str)
         if isinstance(readiness_data, list) and len(readiness_data) > 0:
