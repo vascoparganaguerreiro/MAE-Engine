@@ -102,23 +102,23 @@ def _run_garmin_sync() -> bool:
     try:
         metrics, history_recs, warnings = fetch_garmin_metrics(email, password, date.today(), fetch_history=True, history_days=30)
         
-        # Guardar histórico dos últimos 30 dias na base de dados
         if history_recs:
-            store.bulk_insert_garmin_history(history_recs)
+            try:
+                store.bulk_insert_garmin_history(history_recs)
+            except Exception as e:
+                warnings.append(f"Histórico parcial: {e}")
 
-        # Atualizar perfil se detetado
         prof_ext = metrics.pop("profile_extracted", None)
         if prof_ext:
             from services.data_import import update_profile_if_missing
             update_profile_if_missing(prof_ext)
 
-        # Atualizar métricas de hoje
         if metrics:
             store.upsert_daily_metrics(date.today(), metrics, source="garmin")
             store.set_setting("garmin_last_sync", datetime.now().isoformat(timespec="seconds"))
             st.session_state["garmin_sync_result"] = {
                 "ok": True,
-                "message": "Sincronização completa (hoje + histórico de 30 dias) efetuada com sucesso!",
+                "message": "Sincronização efetuada com sucesso!",
                 "warnings": warnings,
             }
             return True
@@ -132,7 +132,7 @@ def _run_garmin_sync() -> bool:
     except Exception as exc:
         st.session_state["garmin_sync_result"] = {
             "ok": False,
-            "message": f"Erro na sincronização ({type(exc).__name__}). Confirma o e-mail e palavra-passe.",
+            "message": f"Erro técnico na sincronização ({type(exc).__name__}): {exc}",
             "warnings": [],
         }
         return False
