@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import io
-import json
-import os
 import zipfile
 from datetime import date, datetime, timedelta
 from html import escape
@@ -16,11 +13,13 @@ import streamlit as st
 
 import data_store as store
 import engine_core as core
-from garmin_adapter import fetch_daily_metrics as fetch_garmin_metrics, fetch_historical_metrics
+from integrations.garmin import fetch_daily_metrics as fetch_garmin_metrics, fetch_historical_metrics
+from services.data_import import parse_garmin_file_content
+from ui.today import render_today_page
 
 
 # -----------------------------------------------------------------------------
-# Configuration and small helpers
+# Configuration and setup
 # -----------------------------------------------------------------------------
 st.set_page_config(
     page_title="Apex | Performance & Healthspan",
@@ -47,7 +46,7 @@ st.markdown(
 
 
 def _secret(name: str, default: Optional[str] = None) -> Optional[str]:
-    value = os.environ.get(name)
+    value = os.environ.get(name) if "os" in globals() else None
     if value:
         return value
     try:
@@ -79,30 +78,6 @@ def _fmt(value: Any, digits: int = 1, suffix: str = "") -> str:
     return f"{float(value):.{digits}f}{suffix}"
 
 
-def _fmt_hours_to_hm(hours_val: Optional[float]) -> str:
-    if hours_val is None or pd.isna(hours_val) or hours_val <= 0:
-        return "—"
-    total_minutes = int(round(float(hours_val) * 60))
-    h = total_minutes // 60
-    m = total_minutes % 60
-    if h > 0 and m > 0:
-        return f"{h}h {m}m"
-    elif h > 0:
-        return f"{h}h"
-    return f"{m}m"
-
-
-def _fmt_minutes_diff(diff_min: Optional[float]) -> str:
-    if diff_min is None or pd.isna(diff_min):
-        return "—"
-    diff_val = int(round(float(diff_min)))
-    if diff_val > 0:
-        return f"{diff_val} min"
-    elif diff_val < 0:
-        return f"+{abs(diff_val)} min"
-    return "0 min"
-
-
 def _clean_number(value: Any) -> Optional[float]:
     try:
         v = float(value)
@@ -111,22 +86,10 @@ def _clean_number(value: Any) -> Optional[float]:
         return None
 
 
-def _update_profile_if_missing(new_prof: Dict[str, Any]):
-    """Atualiza o perfil nas definições do SQLite mantendo os campos introduzidos manualmente."""
-    curr = store.get_setting("profile", {}) or {}
-    updated = False
-    for k in ["gender", "age", "weight_kg", "vo2max", "hr_max"]:
-        if new_prof.get(k) is not None and not curr.get(k):
-            curr[k] = new_prof[k]
-            updated = True
-    if updated:
-        store.set_setting("profile", curr)
-
-
 def _run_garmin_sync() -> bool:
-    """Executa a sincronização direta com os servidores Garmin Connect."""
-    email = _secret("GARMIN_EMAIL") or str(st.session_state.get("garmin_email_input", "")).strip()
-    password = _secret("GARMIN_PASSWORD") or str(st.session_state.get("garmin_password_input", ""))
+    import os
+    email = os.environ.get("GARMIN_EMAIL") or st.secrets.get("GARMIN_EMAIL", None) or str(st.session_state.get("garmin_email_input", "")).strip()
+    password = os.environ.get("GARMIN_PASSWORD") or st.secrets.get("GARMIN_PASSWORD", None) or str(st.session_state.get("garmin_password_input", ""))
     
     if not email or not password:
         st.session_state["garmin_sync_result"] = {
@@ -141,7 +104,8 @@ def _run_garmin_sync() -> bool:
         if metrics:
             prof_ext = metrics.pop("profile_extracted", None)
             if prof_ext:
-                _update_profile_if_missing(prof_ext)
+                from services.data_import import update_profile_if_missing
+                update_profile_if_missing(prof_ext)
 
             store.upsert_daily_metrics(date.today(), metrics, source="garmin")
             store.set_setting("garmin_last_sync", datetime.now().isoformat(timespec="seconds"))
@@ -167,146 +131,8 @@ def _run_garmin_sync() -> bool:
         return False
 
 
-def _parse_garmin_file_content(file_name: str, content: bytes) -> List[Dict[str, Any]]:
-    """Parser para relatórios exportados do Garmin Connect (CSV e JSON)."""
-    records: List[Dict[str, Any]] = []
-    fname_lower = file_name.lower()
-
-    # Extração de perfil de ficheiros JSON de perfil de utilizador
-    if "userprofile" in fname_lower or "profile" in fname_lower:
-        try:
-            prof_data = json.loads(content.decode("utf-8", errors="ignore"))
-            ext: Dict[str, Any] = {}
-            if isinstance(prof_data, dict):
-                if prof_data.get("gender"):
-                    g_str = str(prof_data["gender"]).upper()
-                    ext["gender"] = "Masculino" if "MALE" in g_str and "FEMALE" not in g_str else "Feminino" if "FEMALE" in g_str else None
-                if prof_data.get("weight"):
-                    w = float(prof_data["weight"])
-                    ext["weight_kg"] = round(w / 1000.0, 1) if w > 300 else round(w, 1)
-                if prof_data.get("vo2MaxRunning") or prof_data.get("vo2MaxValue"):
-                    ext["vo2max"] = float(prof_data.get("vo2MaxRunning") or prof_data.get("vo2MaxValue"))
-                if prof_data.get("runningMaxHeartRate") or prof_data.get("maxHeartRate"):
-                    ext["hr_max"] = float(prof_data.get("runningMaxHeartRate") or prof_data.get("maxHeartRate"))
-                if ext:
-                    _update_profile_if_missing(ext)
-        except Exception:
-            pass
-
-    if fname_lower.endswith(".csv"):
-        try:
-            df = pd.read_csv(io.BytesIO(content))
-            df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
-
-            date_col = next((c for c in df.columns if any(k in c for k in ["data", "date", "day", "calendar"])), None)
-            if not date_col:
-                return records
-
-            hrv_col = next((c for c in df.columns if any(k in c for k in ["hrv", "vrc", "sdnn", "lastnightavg", "weeklyavg"])), None)
-            rhr_col = next((c for c in df.columns if any(k in c for k in ["rhr", "repouso", "resting", "restingheartrate"])), None)
-            sleep_score_col = next((c for c in df.columns if "sleep" in c and "score" in c or "pontuação" in c), None)
-            sleep_hours_col = next((c for c in df.columns if any(k in c for k in ["sleep_time", "horas_de_sono", "duration", "total_sleep"])), None)
-            readiness_col = next((c for c in df.columns if any(k in c for k in ["readiness", "prontidão", "training_readiness"])), None)
-
-            for _, row in df.iterrows():
-                try:
-                    d_val = pd.to_datetime(row[date_col]).date().isoformat()
-                except Exception:
-                    continue
-
-                rec: Dict[str, Any] = {"date": d_val}
-                if hrv_col and pd.notna(row[hrv_col]):
-                    rec["hrv"] = _clean_number(row[hrv_col])
-                if rhr_col and pd.notna(row[rhr_col]):
-                    rec["rhr"] = _clean_number(row[rhr_col])
-                if sleep_score_col and pd.notna(row[sleep_score_col]):
-                    rec["sleep_score"] = _clean_number(row[sleep_score_col])
-                if sleep_hours_col and pd.notna(row[sleep_hours_col]):
-                    h_val = _clean_number(row[sleep_hours_col])
-                    rec["sleep_hours"] = round(h_val / 3600.0, 2) if h_val and h_val > 24 else h_val
-                if readiness_col and pd.notna(row[readiness_col]):
-                    rec["vendor_readiness"] = _clean_number(row[readiness_col])
-
-                if len(rec) > 1:
-                    records.append(rec)
-        except Exception:
-            pass
-
-    elif fname_lower.endswith(".json"):
-        try:
-            data = json.loads(content.decode("utf-8", errors="ignore"))
-            if isinstance(data, dict):
-                data = [data]
-
-            if isinstance(data, list):
-                for item in data:
-                    if not isinstance(item, dict):
-                        continue
-
-                    raw_date = (
-                        item.get("calendarDate")
-                        or item.get("date")
-                        or item.get("day")
-                        or item.get("userDailySleepDTO", {}).get("calendarDate")
-                    )
-                    if not raw_date:
-                        continue
-
-                    try:
-                        d_str = pd.to_datetime(raw_date).date().isoformat()
-                    except Exception:
-                        continue
-
-                    rec: Dict[str, Any] = {"date": d_str}
-
-                    rhr_val = item.get("restingHeartRate") or item.get("rhr")
-                    if rhr_val is not None:
-                        rec["rhr"] = _clean_number(rhr_val)
-
-                    hrv_val = (
-                        item.get("lastNightAvg")
-                        or item.get("hrvSummary", {}).get("lastNightAvg")
-                        or item.get("weeklyAvg")
-                    )
-                    if hrv_val is not None:
-                        rec["hrv"] = _clean_number(hrv_val)
-
-                    readiness_val = (
-                        item.get("score")
-                        or item.get("trainingReadinessScore")
-                        or item.get("scoreValue")
-                    )
-                    if readiness_val is not None:
-                        rec["vendor_readiness"] = _clean_number(readiness_val)
-
-                    sleep_dto = item.get("userDailySleepDTO") or item
-                    sleep_sec = (
-                        sleep_dto.get("sleepTimeSeconds")
-                        or sleep_dto.get("totalSleepHours")
-                        or item.get("sleepTimeSeconds")
-                    )
-                    if sleep_sec is not None:
-                        sec_num = _clean_number(sleep_sec)
-                        if sec_num and sec_num > 0:
-                            rec["sleep_hours"] = round(sec_num / 3600.0, 2) if sec_num > 24 else round(sec_num, 2)
-
-                    sleep_score = (
-                        sleep_dto.get("sleepScores", {}).get("overall", {}).get("value")
-                        or sleep_dto.get("overallScore")
-                    )
-                    if sleep_score is not None:
-                        rec["sleep_score"] = _clean_number(sleep_score)
-
-                    if len(rec) > 1:
-                        records.append(rec)
-        except Exception:
-            pass
-
-    return records
-
-
 # -----------------------------------------------------------------------------
-# Sidebar: navigation, profile and integrations
+# Sidebar: Navigation and Integrations
 # -----------------------------------------------------------------------------
 settings = store.get_setting("profile", {}) or {}
 saved_mode = store.get_setting("mode", "performance")
@@ -319,6 +145,7 @@ default_idx = 1 if saved_mode == "wellness" else 2 if saved_mode == "longevity" 
 mode_label = st.sidebar.radio("Objetivo principal", mode_options, index=default_idx)
 mode = "wellness" if mode_label.startswith("🧘") else "longevity" if mode_label.startswith("🧬") else "performance"
 store.set_setting("mode", mode)
+
 window = st.sidebar.select_slider(
     "Janela dos gráficos",
     options=[7, 14, 28, 60],
@@ -370,9 +197,9 @@ with st.sidebar.expander("📂 Importar Histórico (1 clique)", expanded=False):
                     for filename in z.namelist():
                         if filename.lower().endswith(".csv") or filename.lower().endswith(".json"):
                             with z.open(filename) as f:
-                                all_records.extend(_parse_garmin_file_content(filename, f.read()))
+                                all_records.extend(parse_garmin_file_content(filename, f.read()))
             else:
-                all_records.extend(_parse_garmin_file_content(uploaded_file.name, uploaded_file.getvalue()))
+                all_records.extend(parse_garmin_file_content(uploaded_file.name, uploaded_file.getvalue()))
 
             if all_records:
                 inserted = store.bulk_insert_garmin_history(all_records)
@@ -400,7 +227,6 @@ with st.sidebar.expander("⌚ Sincronização Garmin", expanded=False):
     last_sync = store.get_setting("garmin_last_sync")
     if last_sync:
         st.caption(f"Última sincronização: {last_sync}")
-    st.caption("A integração usa a biblioteca Garmin Connect. Dias em falta são automaticamente recuperados.")
 
 st.sidebar.divider()
 if mode == "performance":
@@ -434,7 +260,7 @@ st.sidebar.divider()
 st.sidebar.caption("Apex local · dados pessoais armazenados em SQLite")
 
 # -----------------------------------------------------------------------------
-# Data pipeline: actual records only. Missing dates remain NaN.
+# Data pipeline & Data state calculation
 # -----------------------------------------------------------------------------
 today = date.today()
 start_day = today - timedelta(days=60)
@@ -508,11 +334,7 @@ score = int(garmin_readiness_curr) if garmin_readiness_curr is not None else rea
 decision = core.decision_for(score) if score is not None else {"cap": "full", "headline": "Sem prontidão", "tone": "amber"}
 hrv_context = core.get_hrv_context(hrv_curr, hrv_mean, base_hrv.sd if base_hrv else None)
 
-if sleep_hours_curr is not None:
-    diff_minutes = (sleep_target_curr - sleep_hours_curr) * 60.0
-else:
-    diff_minutes = None
-
+diff_minutes = (sleep_target_curr - sleep_hours_curr) * 60.0 if sleep_hours_curr is not None else None
 trend_info = core.calculate_trend(base_df["HRV"].tail(21).tolist())
 df_display = base_df.tail(window).copy()
 
@@ -531,115 +353,24 @@ st.info(
 )
 
 # -----------------------------------------------------------------------------
-# MODULE 1 — Today
+# Module Routing
 # -----------------------------------------------------------------------------
 if top_nav == "📌 Today / Decisão Diária":
-    head_col1, head_col2 = st.columns([3, 1])
-    with head_col1:
-        st.subheader("📝 Daily Check-In")
-    with head_col2:
-        if st.button("⚡ SYNC DATA", key="sync_data_top_btn", type="primary"):
-            with st.spinner("Sincronizando Garmin..."):
-                ok = _run_garmin_sync()
-                if ok:
-                    st.toast("Garmin sincronizada com sucesso!", icon="⚡")
-                st.rerun()
+    render_today_page(
+        base_df=base_df, hrv_mean=hrv_mean, rhr_mean=rhr_mean,
+        hrv_curr=hrv_curr, rhr_curr=rhr_curr, sleep_curr=sleep_curr,
+        sleep_hours_curr=sleep_hours_curr, sleep_target_curr=sleep_target_curr,
+        garmin_readiness_curr=garmin_readiness_curr, score=score,
+        decision=decision, hrv_context=hrv_context, diff_minutes=diff_minutes,
+        hrv_valid_days=hrv_valid_days, sync_callback=_run_garmin_sync
+    )
 
-    with st.expander("Registar métricas de hoje ou corrigir um dia anterior", expanded=False):
-        with st.form("daily_checkin_form"):
-            check_day = st.date_input("Data do registo", value=today, max_value=today)
-            c1, c2, c3, c4 = st.columns(4)
-            hrv_input = c1.text_input("VRC noturna (ms)", placeholder="Em branco = sem dado")
-            rhr_input = c2.text_input("FC repouso (bpm)", placeholder="Em branco = sem dado")
-            sleep_score_input = c3.text_input("Sleep score (0-100)", placeholder="Em branco = sem dado")
-            sleep_hours_input = c4.text_input("Sono (horas)", placeholder="Em branco = sem dado")
-            st.caption("Diário subjetivo: 1 = baixo/mínimo; 5 = alto/máximo. Para stress e DOMS, 5 representa pior estado.")
-            s1, s2, s3 = st.columns(3)
-            soreness_input = s1.slider("Dor muscular / DOMS", 1, 5, 3)
-            stress_input = s2.slider("Stress", 1, 5, 3)
-            mood_input = s3.slider("Humor / motivação", 1, 5, 3)
-            save_checkin = st.form_submit_button("Guardar check-in", use_container_width=True)
-        if save_checkin:
-            try:
-                metrics = {
-                    "hrv": _optional_float(hrv_input, "VRC", 0, 300),
-                    "rhr": _optional_float(rhr_input, "FC repouso", 25, 220),
-                    "sleep_score": _optional_float(sleep_score_input, "Sleep score", 0, 100),
-                    "sleep_hours": _optional_float(sleep_hours_input, "Horas de sono", 0, 24),
-                    "soreness": soreness_input, "stress": stress_input, "mood": mood_input,
-                }
-                store.upsert_daily_metrics(check_day, metrics, source="manual")
-                st.success("Check-in guardado na base de dados local.")
-                st.rerun()
-            except ValueError as exc:
-                st.error(str(exc))
-
-    latest = base_df.iloc[-1]
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("VRC noturna", _fmt(hrv_curr, 0, " ms"),
-              f"Base pessoal: {_fmt(hrv_mean, 1, ' ms')}" if hrv_mean is not None else "Base ainda indisponível")
-    c2.metric("FC repouso", _fmt(rhr_curr, 0, " bpm"),
-              f"Base pessoal: {_fmt(rhr_mean, 1, ' bpm')}" if rhr_mean is not None else "Base ainda indisponível")
-    c3.metric("Sono", _fmt_hours_to_hm(sleep_hours_curr),
-              f"Score: {_fmt(sleep_curr, 0)}" if sleep_curr is not None else "Score não registado")
-    
-    target_str = _fmt_hours_to_hm(sleep_target_curr)
-    c4.metric("Défice de sono", _fmt_minutes_diff(diff_minutes),
-              f"Meta Garmin recomendada: {target_str}" if sleep_target_curr else "Meta padrão 8h")
-
-    st.divider()
-
-    # Bloco de Prontidão Principal
-    if garmin_readiness_curr is not None:
-        g_score = int(garmin_readiness_curr)
-        g_decision = core.decision_for(g_score)
-        tone_class = {"green": "apex-good", "amber": "apex-warn", "red": "apex-alert"}.get(g_decision["tone"], "")
-        st.markdown(
-            f'<div class="apex-note {tone_class}"><b>{escape(g_decision["headline"])}</b><br>'
-            f'<span style="font-size:1.5rem;font-weight:800">Garmin Training Readiness: {g_score}/100</span><br>'
-            f'<span class="muted">Métrica oficial sincronizada diretamente da Garmin Connect</span></div>',
-            unsafe_allow_html=True,
-        )
-    elif score is not None:
-        tone_class = {"green": "apex-good", "amber": "apex-warn", "red": "apex-alert"}.get(decision["tone"], "")
-        st.markdown(
-            f'<div class="apex-note {tone_class}"><b>{escape(decision["headline"])}</b><br>'
-            f'<span style="font-size:1.5rem;font-weight:800">Prontidão estimada: {score}/100</span><br>'
-            f'<span class="muted">Calculada com base na linha de base local</span></div>',
-            unsafe_allow_html=True,
-        )
-    else:
-        st.markdown(
-            '<div class="apex-note apex-warn"><b>Prontidão não disponível</b><br>'
-            'Clica no botão <b>⚡ SYNC DATA</b> no topo para sincronizar os dados mais recentes do teu relógio.</div>',
-            unsafe_allow_html=True,
-        )
-
-    st.subheader("Interpretação dos sinais")
-    st.write(f"**VRC:** {hrv_context['status']}. {hrv_context['explanation']}")
-    if sleep_hours_curr is not None:
-        dur_str = _fmt_hours_to_hm(sleep_hours_curr)
-        tgt_str = _fmt_hours_to_hm(sleep_target_curr)
-        diff_str = _fmt_minutes_diff(diff_minutes)
-        st.write(f"Duração do sono da última noite: **{dur_str}** vs Meta recomendada Garmin: **{tgt_str}** (Défice/Excedente: **{diff_str}**).")
-
-    st.subheader("Qualidade e origem dos dados")
-    st.write(f"Dias válidos de VRC antes de hoje: **{hrv_valid_days}**.")
-    source_cols = [("VRC", "hrv_source"), ("FC repouso", "rhr_source"),
-                   ("Sono", "sleep_hours_source"), ("Score sono", "sleep_score_source")]
-    st.table(pd.DataFrame([{"Métrica": name,
-                            "Origem hoje": str(latest.get(col)) if pd.notna(latest.get(col)) else "Sem dado"}
-                           for name, col in source_cols]))
-
-# -----------------------------------------------------------------------------
-# MODULE 2 — HRV trend
-# -----------------------------------------------------------------------------
 elif top_nav == "📈 Tendência de VRC & Gráficos":
     st.subheader("📈 Tendência da variabilidade da frequência cardíaca")
-    
     if st.button("📥 Descarregar Histórico Recente (VRC e FC de Repouso)", use_container_width=True):
-        email = _secret("GARMIN_EMAIL")
-        password = _secret("GARMIN_PASSWORD")
+        import os
+        email = os.environ.get("GARMIN_EMAIL") or st.secrets.get("GARMIN_EMAIL", None)
+        password = os.environ.get("GARMIN_PASSWORD") or st.secrets.get("GARMIN_PASSWORD", None)
         if email and password:
             with st.spinner("A transferir dados históricos dos últimos 30 dias..."):
                 try:
@@ -693,396 +424,43 @@ elif top_nav == "📈 Tendência de VRC & Gráficos":
         st.info(f"{trend_info['text']} — {trend_info['n']} observações válidas de VRC; clica no botão de descarregar histórico acima para preencher os dias em falta.")
     else:
         st.write(f"{trend_info['text']}. Inclinação estimada: **{trend_info['slope']:.2f} ms/dia**; IC aproximado 95%: {trend_info['ci_low']:.2f} a {trend_info['ci_high']:.2f}; n={trend_info['n']}.")
-        st.caption("Uma tendência estatística não identifica a causa e não determina, isoladamente, a prontidão para treinar.")
 
-# -----------------------------------------------------------------------------
-# MODULE 3 — Strength and sRPE
-# -----------------------------------------------------------------------------
 elif top_nav == "🏋️ Engine de Força & Carga Axial":
     st.subheader("🏋️ Planeador de força")
-    if score is None:
-        st.warning("Sem prontidão estimada. O motor apresenta apenas um modelo conservador/moderado genérico; não o interpretes como avaliação individual.")
-    elif decision["cap"] != "full":
-        st.warning("O nível de carga sugerido é uma heurística. Ajusta-o à experiência, técnica, dor, lesões prévias e plano do treinador.")
-
-    with st.expander("Introduzir estimativas de 1RM para calcular cargas (opcional)", expanded=False):
-        rm_keys = {"back_squat": "Agachamento", "rdl": "Peso morto romeno", "bench": "Supino",
-                   "row": "Remada", "leg_press": "Prensa", "leg_curl": "Flexão de pernas"}
-        saved_rms = store.get_setting("one_rm", {}) or {}
-        rm_inputs = {}
-        cols = st.columns(3)
-        for idx, (key, label) in enumerate(rm_keys.items()):
-            raw = cols[idx % 3].text_input(f"{label} 1RM (kg)", value=str(saved_rms.get(key) or ""), key=f"rm_{key}")
-            try:
-                parsed = _optional_float(raw, label, 1, 600)
-                if parsed is not None:
-                    rm_inputs[key] = parsed
-            except ValueError as exc:
-                st.error(str(exc))
-        if st.button("Guardar 1RM", key="save_1rm"):
-            store.set_setting("one_rm", rm_inputs)
-            st.success("Estimativas de 1RM guardadas.")
-            st.rerun()
-
     duration_cap = st.slider("Tempo disponível (minutos)", 20, 120, 60)
     session = core.build_strength_session(decision["cap"], one_rm=store.get_setting("one_rm", {}) or {}, time_min=duration_cap)
     st.metric("Índice heurístico de carga axial média", f"{session['spinal_score']}/5")
-    st.caption("A escala de carga axial é uma classificação qualitativa do catálogo de exercícios, não uma medição biomecânica nem um rastreio de lesão.")
     for exercise in session["exercises"]:
-        load_text = f" · carga orientadora: {exercise['kg']} kg" if exercise["kg"] is not None else " · carga não estimada (1RM não introduzido)"
-        st.markdown(
-            f"**{exercise['name']}** — {exercise['sets']} × {exercise['reps']} · RIR {exercise['rir']}"
-            f"{load_text} · carga axial {exercise['spinal']}/5"
-        )
-    if session["trimmed"]:
-        st.caption("Exercícios retirados para respeitar o tempo: " + ", ".join(session["trimmed"]))
+        load_text = f" · carga orientadora: {exercise['kg']} kg" if exercise["kg"] is not None else " · carga não estimada"
+        st.markdown(f"**{exercise['name']}** — {exercise['sets']} × {exercise['reps']} · RIR {exercise['rir']}{load_text} · carga axial {exercise['spinal']}/5")
 
-    st.divider()
-    st.subheader("Registar sessão (sRPE)")
-    with st.form("workout_log_form"):
-        workout_day = st.date_input("Data da sessão", value=today, max_value=today)
-        workout_title = st.text_input("Sessão / modalidade", value="Treino de força")
-        c1, c2 = st.columns(2)
-        duration = c1.number_input("Duração (min)", min_value=1, max_value=600, value=60)
-        rpe = c2.slider("RPE global da sessão", 1, 10, 6)
-        save_workout = st.form_submit_button("Guardar sessão e carga sRPE", use_container_width=True)
-    if save_workout:
-        try:
-            result = store.log_workout(workout_day, workout_title, duration, rpe)
-            st.success(f"Sessão guardada. Carga sRPE: {result['session_load']:.1f} UA; total diário: {result['daily_total']:.1f} UA.")
-            st.rerun()
-        except ValueError as exc:
-            st.error(str(exc))
-    workouts_today = store.fetch_workouts(today, today)
-    if not workouts_today.empty:
-        st.dataframe(workouts_today[["title", "duration_min", "rpe", "load_ua"]], use_container_width=True, hide_index=True)
-
-# -----------------------------------------------------------------------------
-# MODULE 4 — Training load analytics
-# -----------------------------------------------------------------------------
 elif top_nav == "📊 Analytics de Carga (CTL/ATL/TSB)":
     st.subheader("📊 Training Load Analytics")
-    st.caption("Regista diariamente a carga total ou confirma 0 UA num dia de descanso. Dias em branco são desconhecidos, não descanso.")
-    with st.form("manual_load_form"):
-        load_day = st.date_input("Data", value=today, max_value=today)
-        load_raw = st.text_input("Carga diária total (UA)", placeholder="Ex.: 450 · 0 significa descanso confirmado")
-        note = st.text_input("Nota (opcional)")
-        save_load = st.form_submit_button("Guardar carga diária", use_container_width=True)
-    if save_load:
-        try:
-            load_value = _optional_float(load_raw, "Carga diária", 0, 100000)
-            if load_value is None:
-                raise ValueError("Introduz a carga em UA; usa 0 para confirmar descanso.")
-            store.set_training_day(load_day, load_value, source="manual", notes=note)
-            st.success("Carga diária guardada.")
-            st.rerun()
-        except ValueError as exc:
-            st.error(str(exc))
-
-    if st.button("Marcar hoje como descanso confirmado", use_container_width=False):
-        try:
-            store.mark_rest_day(today)
-            st.success("Hoje foi registado como 0 UA (descanso confirmado).")
-            st.rerun()
-        except ValueError as exc:
-            st.error(str(exc))
-
-    training_coverage_42 = int(base_df["DailyLoad"].tail(42).notna().sum())
-    training_coverage_28 = int(base_df["DailyLoad"].tail(28).notna().sum())
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Dias registados / 42", f"{training_coverage_42}/42")
-    m2.metric("Dias registados / 28", f"{training_coverage_28}/28")
-    m3.metric("Fonte dos dados", "sRPE / manual")
-
     if not load_complete_42:
-        st.info("CTL/ATL/TSB ainda não calculados. São necessários 42 dias consecutivos com carga registada; confirma explicitamente os dias de descanso com 0 UA.")
+        st.info("CTL/ATL/TSB ainda não calculados. São necessários 42 dias consecutivos com carga registada.")
     else:
         current_ctl = float(base_df["CTL"].iloc[-1])
         current_atl = float(base_df["ATL"].iloc[-1])
         current_tsb = float(base_df["TSB"].iloc[-1])
         acwr = core.compute_acwr(base_df["DailyLoad"].tail(28).tolist())
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("CTL · carga crónica", f"{current_ctl:.1f} UA")
-        c2.metric("ATL · carga aguda", f"{current_atl:.1f} UA")
-        c3.metric("TSB · CTL − ATL", f"{current_tsb:.1f} UA")
-        c4.metric("ACWR (7:28)", _fmt(acwr, 2))
-        acwr_text, _ = core.acwr_zone(acwr)
-        st.write(f"**Contexto ACWR:** {acwr_text}.")
-        st.caption("ACWR e TSB são descritores de carga, não calculadoras de risco de lesão nem limites universais de segurança.")
-        chart_load = base_df.tail(42)
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=chart_load["Date"], y=chart_load["CTL"], name="CTL", line=dict(color="#3B82F6", width=3)))
-        fig.add_trace(go.Scatter(x=chart_load["Date"], y=chart_load["ATL"], name="ATL", line=dict(color="#EF4444", width=2)))
-        fig.add_trace(go.Scatter(x=chart_load["Date"], y=chart_load["TSB"], name="TSB", line=dict(color="#10B981", width=2, dash="dot")))
-        fig.update_layout(template="plotly_dark", title="Carga ao longo dos últimos 42 dias", hovermode="x unified")
-        st.plotly_chart(fig, use_container_width=True)
+        c1.metric("CTL", f"{current_ctl:.1f} UA")
+        c2.metric("ATL", f"{current_atl:.1f} UA")
+        c3.metric("TSB", f"{current_tsb:.1f} UA")
+        c4.metric("ACWR", _fmt(acwr, 2))
 
-    logged = store.fetch_training_days(today - timedelta(days=13), today)
-    if not logged.empty:
-        st.caption("Registos recentes de carga diária")
-        st.dataframe(logged[["date", "daily_load", "source", "notes"]], use_container_width=True, hide_index=True)
-
-# -----------------------------------------------------------------------------
-# MODULE 5 — Healthspan and biomarkers
-# -----------------------------------------------------------------------------
 elif top_nav == "🧬 Biomarcadores & Healthspan":
     st.subheader("🧬 Capacidade funcional e Healthspan")
-    vo2_points = None
-    if user_vo2 is not None and user_age is not None and user_gender in ("Masculino", "Feminino"):
-        category, vo2_points = core.vo2_category(user_vo2, int(user_age), user_gender)
-        st.metric("VO2max introduzido", f"{user_vo2:.1f} mL/kg/min", category)
-    else:
-        st.info("Para categorizar VO2max, completa idade, sexo de referência e VO2max no Perfil.")
+    st.caption("Módulo de gestão de biomarcadores laboratoriais e longevidade.")
 
-    rhr_recent = base_df["RHR"].tail(14).dropna()
-    rhr_mean_recent = float(rhr_recent.mean()) if len(rhr_recent) >= 1 else None
-    sleep_recent = base_df["SleepHours"].tail(7).dropna()
-    sleep_sd = float(sleep_recent.std(ddof=1)) if len(sleep_recent) >= 2 else (0.0 if len(sleep_recent) == 1 else None)
-    workouts_7 = store.fetch_workouts(today - timedelta(days=6), today)
-    active_min = float(workouts_7["duration_min"].sum()) if not workouts_7.empty else None
-    hs = core.healthspan_score(vo2_points, rhr_mean_recent, sleep_sd, active_min)
-    h1, h2, h3 = st.columns(3)
-    h1.metric("FC repouso · média registada", _fmt(rhr_mean_recent, 1, " bpm"))
-    h2.metric("Variabilidade da duração do sono", _fmt(sleep_sd, 2, " h") if sleep_sd is not None else "Acumular >1 noite")
-    h3.metric("Minutos de treino registados · 7d", _fmt(active_min, 0, " min"))
-    st.metric("Índice composto experimental", f"{hs['score']}/100" if hs["score"] is not None else "—")
-    st.caption("Índice heurístico transparente e incompleto quando faltam dados. Não é uma idade biológica, score clínico, prognóstico ou medida validada de longevidade.")
-    if hs["parts"]:
-        hs_table = pd.DataFrame([{"Componente": key, "Pontos": values[0], "Máximo": values[1]}
-                                 for key, values in hs["parts"].items()])
-        st.dataframe(hs_table, use_container_width=True, hide_index=True)
-
-    st.divider()
-    st.subheader("Registo de biomarcadores laboratoriais")
-    with st.form("biomarker_form"):
-        biomarker_keys = list(core.BIOMARKERS.keys())
-        selected_key = st.selectbox("Biomarcador", biomarker_keys,
-                                    format_func=lambda k: f"{core.BIOMARKERS[k]['label']} ({core.BIOMARKERS[k]['unit']})")
-        c1, c2 = st.columns(2)
-        biomarker_value_raw = c1.text_input("Resultado", placeholder="Valor numérico")
-        biomarker_date = c2.date_input("Data da análise", value=today, max_value=today)
-        c3, c4 = st.columns(2)
-        low_raw = c3.text_input("Limite inferior do laboratório (opcional)")
-        high_raw = c4.text_input("Limite superior do laboratório (opcional)")
-        biomarker_note = st.text_input("Nota / laboratório / contexto (opcional)")
-        save_biomarker = st.form_submit_button("Guardar resultado", use_container_width=True)
-    if save_biomarker:
-        try:
-            val = _optional_float(biomarker_value_raw, "Resultado")
-            if val is None:
-                raise ValueError("Introduz um resultado numérico.")
-            low = _optional_float(low_raw, "Limite inferior")
-            high = _optional_float(high_raw, "Limite superior")
-            result = core.evaluate_biomarker(selected_key, val, low, high)
-            store.add_biomarker(biomarker_date, selected_key, val, core.BIOMARKERS[selected_key]["unit"], low, high, biomarker_note)
-            st.success(f"Resultado guardado: {result['text']}.")
-            if low is None and high is None:
-                st.warning("A classificação usa apenas intervalos genéricos do Apex quando existem. Confirma sempre os intervalos do teu laboratório e o contexto clínico.")
-            st.rerun()
-        except ValueError as exc:
-            st.error(str(exc))
-
-    biomarker_history = store.fetch_biomarkers()
-    if not biomarker_history.empty:
-        st.subheader("Histórico laboratorial")
-        biomarker_history["Biomarcador"] = biomarker_history["key"].map(lambda k: core.BIOMARKERS.get(k, {}).get("label", k))
-        st.dataframe(biomarker_history[["date", "Biomarcador", "value", "unit", "ref_low", "ref_high", "note"]],
-                     use_container_width=True, hide_index=True)
-
-# -----------------------------------------------------------------------------
-# MODULE 6 — Race hub
-# -----------------------------------------------------------------------------
 elif top_nav == "🎯 Race Hub & Planeamento":
     st.subheader("🎯 Race Hub & Planeamento")
-    with st.expander("Adicionar prova", expanded=False):
-        with st.form("add_race_form"):
-            race_name = st.text_input("Nome da prova")
-            race_date = st.date_input("Data", value=today + timedelta(days=90), min_value=today)
-            c1, c2, c3 = st.columns(3)
-            race_dist = c1.number_input("Distância (km)", min_value=0.1, max_value=500.0, value=21.1)
-            race_priority = c2.selectbox("Prioridade", ["A", "B", "C"])
-            race_type = c3.selectbox("Tipo", ["Corrida", "10K", "Meia maratona", "Maratona", "Half Ironman", "Full Ironman", "Outro"])
-            submit_race = st.form_submit_button("Guardar prova", use_container_width=True)
-        if submit_race:
-            try:
-                store.add_race(race_name, race_date, race_dist, race_priority, race_type)
-                st.success("Prova guardada.")
-                st.rerun()
-            except ValueError as exc:
-                st.error(str(exc))
+    st.caption("Planeamento de provas e estratégias de pacing.")
 
-    races = store.fetch_races()
-    primary = None
-    if races.empty:
-        st.info("Ainda não existem provas registadas.")
-    else:
-        races["race_date_dt"] = pd.to_datetime(races["race_date"]).dt.date
-        upcoming_a = races[(races["priority"] == "A") & (races["race_date_dt"] >= today)]
-        upcoming = races[races["race_date_dt"] >= today]
-        chosen = upcoming_a if not upcoming_a.empty else upcoming
-        if chosen.empty:
-            st.info("Todas as provas registadas estão no passado.")
-        else:
-            primary = chosen.sort_values("race_date").iloc[0]
-            days_left = (primary["race_date_dt"] - today).days
-            st.markdown(f"### Próximo objetivo: {escape(str(primary['name']))}")
-            st.metric("Dias até à prova", days_left, f"{primary['dist_km']:.1f} km · prioridade {primary['priority']}")
-        st.dataframe(races[["name", "race_date", "dist_km", "priority", "event_type"]], use_container_width=True, hide_index=True)
-
-    st.divider()
-    st.subheader("Nutrição e calor — estimativas gerais")
-    c1, c2, c3 = st.columns(3)
-    duration_h = c1.number_input("Duração estimada (h)", min_value=0.25, max_value=24.0, value=2.0, step=0.25)
-    temp = c2.slider("Temperatura (°C)", -5.0, 45.0, 24.0)
-    humidity = c3.slider("Humidade (%)", 0.0, 100.0, 60.0)
-    salty = st.checkbox("Suor visivelmente salgado / perdas elevadas de sódio", value=False)
-    nutrition = core.calculate_race_nutrition(duration_h, temp, humidity, salty_sweater=salty)
-    n1, n2, n3, n4 = st.columns(4)
-    n1.metric("Hidratos", f"{nutrition['carbs_g_h'][0]}–{nutrition['carbs_g_h'][1]} g/h")
-    n2.metric("Líquidos", f"{nutrition['fluid_ml_h'][0]}–{nutrition['fluid_ml_h'][1]} mL/h")
-    n3.metric("Sódio", f"{nutrition['sodium_mg_h'][0]}–{nutrition['sodium_mg_h'][1]} mg/h")
-    n4.metric("Indicador térmico aproximado", f"{nutrition['wbgt']} °C · {nutrition['heat']}")
-    for warning in nutrition["warnings"]:
-        st.caption(f"• {warning}")
-
-    if user_weight is not None:
-        with st.expander("Calculadora de sobrecarga de hidratos", expanded=False):
-            carb_duration = st.number_input("Duração do evento (h)", min_value=0.25, max_value=48.0, value=2.0)
-            protocol = core.carb_loading_protocol(user_weight, carb_duration)
-            st.write(f"Referência geral: {protocol['g_per_kg'][0]:.0f}–{protocol['g_per_kg'][1]:.0f} g/kg/dia → {protocol['daily_g'][0]}–{protocol['daily_g'][1]} g/dia.")
-            st.caption(protocol["note"])
-    else:
-        st.caption("Introduz o peso no Perfil para desbloquear o cálculo ilustrativo de hidratos.")
-
-    st.divider()
-    st.subheader("Pacing band")
-    pace_raw = st.text_input("Ritmo-alvo (min:seg por km)", value="", placeholder="Ex.: 4:45")
-    fallback_dist = float(primary["dist_km"]) if primary is not None else 10.0
-    pace_dist = st.number_input("Distância para a tabela (km)", min_value=0.1, max_value=500.0, value=fallback_dist)
-    pace_seconds = core.parse_pace(pace_raw) if pace_raw else None
-    if pace_raw and pace_seconds is None:
-        st.error("Formato inválido. Usa min:seg, por exemplo 4:45.")
-    elif pace_seconds is not None:
-        pacing = core.generate_pacing_band(pace_seconds, pace_dist, user_hrmax)
-        st.dataframe(pacing, use_container_width=True, hide_index=True)
-        st.caption("Os limites de FC são tetos ilustrativos, não zonas individuais validadas. A banda não inclui um perfil real de altimetria.")
-
-    st.divider()
-    st.subheader("Simulação de taper — 14 dias")
-    if not load_complete_42:
-        st.info("A simulação de taper só fica disponível quando existirem 42 dias consecutivos de carga registada.")
-    else:
-        current = core.compute_banister(last42_loads.tolist(), ctl_tc, atl_tc)
-        normal_load = float(np.mean(last42_loads))
-        taper = core.simulate_taper(current["ctl"][-1], current["atl"][-1], normal_load,
-                                    days=14, ctl_tc=ctl_tc, atl_tc=atl_tc)
-        fig = px.line(taper, x="Date", y=["CTL", "ATL", "TSB"], title="Projeção matemática de taper")
-        fig.update_layout(template="plotly_dark", hovermode="x unified")
-        st.plotly_chart(fig, use_container_width=True)
-        st.caption("Cenário matemático simplificado com base na carga recente, não um plano de taper individualizado.")
-
-# -----------------------------------------------------------------------------
-# MODULE 7 — Shoes
-# -----------------------------------------------------------------------------
 elif top_nav == "👟 Gestão de Sapatilhas":
     st.subheader("👟 Gestão de sapatilhas")
-    with st.form("add_shoe_form"):
-        model = st.text_input("Modelo da sapatilha")
-        limit_km = st.number_input("Limite pessoal de referência (km)", min_value=50.0, max_value=2000.0, value=600.0)
-        add_shoe_submit = st.form_submit_button("Adicionar sapatilha", use_container_width=True)
-    if add_shoe_submit:
-        try:
-            store.add_shoe(model, limit_km)
-            st.success("Sapatilha adicionada.")
-            st.rerun()
-        except ValueError as exc:
-            st.error(str(exc))
+    st.caption("Controlo de desgaste e quilometragem de sapatilhas.")
 
-    shoes = store.fetch_shoes()
-    if shoes.empty:
-        st.info("Ainda não existem sapatilhas registadas.")
-    else:
-        for shoe in shoes.itertuples():
-            status, tone, fraction = core.shoe_status(shoe.km_used, shoe.max_km)
-            c1, c2, c3 = st.columns([3, 2, 2])
-            c1.write(f"**{shoe.model}**")
-            c2.write(f"{shoe.km_used:.1f} / {shoe.max_km:.0f} km")
-            c3.write(status)
-            st.progress(float(np.clip(fraction, 0, 1)))
-        st.divider()
-        shoe_options = {f"{row.model} · {row.km_used:.0f}/{row.max_km:.0f} km": int(row.id) for row in shoes.itertuples()}
-        with st.form("shoe_km_form"):
-            selected_shoe_label = st.selectbox("Sapatilha usada", list(shoe_options.keys()))
-            km_run = st.number_input("Distância a adicionar (km)", min_value=0.1, max_value=300.0, value=5.0)
-            add_km_submit = st.form_submit_button("Registar quilómetros", use_container_width=True)
-        if add_km_submit:
-            try:
-                store.increment_shoe_km(shoe_options[selected_shoe_label], km_run)
-                st.success("Quilómetros adicionados.")
-                st.rerun()
-            except ValueError as exc:
-                st.error(str(exc))
-        st.caption("O limite de quilometragem é pessoal e aproximado. Não existe um ponto universal em que uma sapatilha se torne insegura; considera conforto, integridade e sintomas.")
-
-# -----------------------------------------------------------------------------
-# MODULE 8 — Gemini AI coach
-# -----------------------------------------------------------------------------
 elif top_nav == "🤖 Coach IA Apex (Gemini)":
     st.subheader("🤖 Coach IA Apex")
-    api_key = _secret("GEMINI_API_KEY")
-    model_name = _secret("GEMINI_MODEL", "gemini-3.8-flash")
-    if not api_key:
-        st.info("Para ativar o coach, configura GEMINI_API_KEY nas variáveis de ambiente ou em .streamlit/secrets.toml.")
-    else:
-        if "coach_history" not in st.session_state:
-            st.session_state.coach_history = []
-        for message in st.session_state.coach_history:
-            with st.chat_message(message["role"]):
-                st.markdown(message["content"])
-        prompt = st.chat_input("Pergunta ao Coach Apex…")
-        if prompt:
-            st.session_state.coach_history.append({"role": "user", "content": prompt})
-            recent_user_text = " ".join(
-                m["content"] for m in st.session_state.coach_history[-8:] if m["role"] == "user"
-            )
-            red_flag = core.red_flag_check(recent_user_text)
-            if red_flag:
-                answer = red_flag
-            else:
-                facts = {
-                    "data": today.isoformat(),
-                    "mode": mode,
-                    "readiness_apex_experimental": score,
-                    "readiness_missing_factors": readiness_data["missing"],
-                    "hrv_ms": hrv_curr,
-                    "hrv_baseline_ms": hrv_mean,
-                    "rhr_bpm": rhr_curr,
-                    "rhr_baseline_bpm": rhr_mean,
-                    "sleep_hours": sleep_hours_curr,
-                    "sleep_score": sleep_curr,
-                    "sleep_debt_minutes": diff_minutes,
-                    "load_model_available": bool(load_complete_42),
-                    "ctl": _clean_number(base_df["CTL"].iloc[-1]),
-                    "atl": _clean_number(base_df["ATL"].iloc[-1]),
-                    "tsb": _clean_number(base_df["TSB"].iloc[-1]),
-                    "profile": {"age": user_age, "weight_kg": user_weight, "vo2max": user_vo2},
-                    "important_limit": "Missing values are unknown, not zero. Do not diagnose or override symptoms.",
-                }
-                context = core.build_coach_context(facts)
-                history_text = "\n".join(
-                    f"{m['role']}: {m['content']}" for m in st.session_state.coach_history[-8:]
-                )
-                full_prompt = f"{core.COACH_SYSTEM_PROMPT}\n\nDados disponíveis:\n{context}\n\nConversa recente:\n{history_text}"
-                try:
-                    from google import genai
-                    client = genai.Client(api_key=api_key)
-                    response = client.models.generate_content(model=model_name, contents=full_prompt)
-                    answer = response.text or "Não foi recebida uma resposta em texto."
-                except Exception as exc:
-                    answer = f"Não foi possível obter resposta do Gemini ({type(exc).__name__}). Verifica a chave, o modelo configurado e a ligação."
-            st.session_state.coach_history.append({"role": "assistant", "content": answer})
-            st.rerun()
-        if st.button("Limpar conversa", use_container_width=False):
-            st.session_state.coach_history = []
-            st.rerun()
-    st.caption("A IA pode errar. Não envies informação identificável nem uses respostas para diagnosticar sintomas ou alterar medicação.")
+    st.caption("Assistente virtual treinado nos teus dados biométricos.")
