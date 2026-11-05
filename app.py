@@ -129,6 +129,7 @@ def _parse_garmin_file_content(file_name: str, content: bytes) -> List[Dict[str,
             rhr_col = next((c for c in df.columns if "rhr" in c or "repouso" in c or "resting" in c), None)
             sleep_score_col = next((c for c in df.columns if "sleep score" in c or "pontuação do sono" in c), None)
             sleep_hours_col = next((c for c in df.columns if "sleep time" in c or "horas de sono" in c or "duration" in c), None)
+            readiness_col = next((c for c in df.columns if "readiness" in c or "prontidão" in c), None)
 
             for _, row in df.iterrows():
                 try:
@@ -146,6 +147,8 @@ def _parse_garmin_file_content(file_name: str, content: bytes) -> List[Dict[str,
                 if sleep_hours_col and pd.notna(row[sleep_hours_col]):
                     h_val = _clean_number(row[sleep_hours_col])
                     rec["sleep_hours"] = round(h_val / 3600.0, 2) if h_val and h_val > 24 else h_val
+                if readiness_col and pd.notna(row[readiness_col]):
+                    rec["vendor_readiness"] = _clean_number(row[readiness_col])
 
                 if len(rec) > 1:
                     records.append(rec)
@@ -189,13 +192,24 @@ def _parse_garmin_file_content(file_name: str, content: bytes) -> List[Dict[str,
                     if hrv_val is not None:
                         rec["hrv"] = _clean_number(hrv_val)
 
-                    # Sono (Horas e Score) - Deteção robusta para múltiplos esquemas JSON Garmin
+                    # Garmin Training Readiness (Oficial da Garmin)
+                    readiness_val = (
+                        item.get("score")
+                        or item.get("trainingReadinessScore")
+                        or item.get("scoreValue")
+                        or item.get("userDailyTrainingReadinessDTO", {}).get("score")
+                    )
+                    if readiness_val is not None and ("readiness" in fname_lower or "training" in fname_lower or "userdaily" in fname_lower):
+                        rec["vendor_readiness"] = _clean_number(readiness_val)
+
+                    # Sono (Horas e Score) - Deteção abrangente de todas as estruturas JSON de sono Garmin
                     sleep_dto = item.get("userDailySleepDTO") or item
                     sleep_sec = (
                         sleep_dto.get("sleepTimeSeconds")
                         or sleep_dto.get("totalSleepHours")
                         or sleep_dto.get("unmeasurableSleepSeconds")
                         or item.get("sleepTimeSeconds")
+                        or item.get("totalSleepSeconds")
                     )
                     if sleep_sec is not None:
                         sec_num = _clean_number(sleep_sec)
@@ -401,6 +415,7 @@ hrv_curr = _clean_number(base_df["HRV"].iloc[-1])
 rhr_curr = _clean_number(base_df["RHR"].iloc[-1])
 sleep_curr = _clean_number(base_df["SleepScore"].iloc[-1])
 sleep_hours_curr = _clean_number(base_df["SleepHours"].iloc[-1])
+garmin_readiness_curr = _clean_number(base_df["GarminReadiness"].iloc[-1])
 base_hrv = core.compute_baseline(base_df["HRV"], min_n=14, exclude_last=True)
 base_rhr = core.compute_baseline(base_df["RHR"], min_n=14, exclude_last=True)
 hrv_mean = base_hrv.mean if base_hrv else None
@@ -410,7 +425,9 @@ calib_state, calib_label = core.DataQualityEngine.get_calibration_state(hrv_vali
 
 zs_today = core.zscores_for_day(base_df, -1)
 readiness_data = core.compute_readiness(zs_today, mode=mode)
-score = readiness_data["score"]
+
+# Forçar a Prontidão a usar a métrica direta da Garmin se disponível
+score = int(garmin_readiness_curr) if garmin_readiness_curr is not None else readiness_data["score"]
 decision = core.decision_for(score)
 hrv_context = core.get_hrv_context(hrv_curr, hrv_mean, base_hrv.sd if base_hrv else None)
 sleep_debt = core.compute_sleep_debt(base_df["SleepHours"].tolist(), target=8.0, nights=7)
@@ -477,38 +494,36 @@ if top_nav == "📌 Today / Decisão Diária":
               f"{sleep_debt['nights']} noites registadas" if sleep_debt["nights"] else "Sem noites registadas")
 
     st.divider()
-    if score is None:
-        st.markdown('<div class="apex-note apex-warn"><b>Prontidão não calculada</b><br>São necessários pelo menos dois sinais com linha de base pessoal suficiente. Regista dados de forma consistente; não uses um score ausente como indicação para treinar ou descansar.</div>', unsafe_allow_html=True)
-    else:
+    
+    # Apresentação da Prontidão com prioridade ao Training Readiness oficial da Garmin
+    if garmin_readiness_curr is not None:
+        g_score = int(garmin_readiness_curr)
+        g_decision = core.decision_for(g_score)
+        tone_class = {"green": "apex-good", "amber": "apex-warn", "red": "apex-alert"}.get(g_decision["tone"], "")
+        st.markdown(
+            f'<div class="apex-note {tone_class}"><b>{escape(g_decision["headline"])}</b><br>'
+            f'<span style="font-size:1.5rem;font-weight:800">Garmin Training Readiness: {g_score}/100</span><br>'
+            f'<span class="muted">Métrica direta importada da Garmin Connect</span></div>',
+            unsafe_allow_html=True,
+        )
+    elif score is not None:
         tone_class = {"green": "apex-good", "amber": "apex-warn", "red": "apex-alert"}.get(decision["tone"], "")
         st.markdown(
             f'<div class="apex-note {tone_class}"><b>{escape(decision["headline"])}</b><br>'
             f'<span style="font-size:1.5rem;font-weight:800">Prontidão estimada: {score}/100</span><br>'
-            f'<span class="muted">Cobertura dos pesos: {readiness_data["coverage"]:.0%} · fatores ausentes: '
-            f'{", ".join(readiness_data["missing"]) if readiness_data["missing"] else "nenhum"}</span></div>',
+            f'<span class="muted">Calculada com base na linha de base local</span></div>',
             unsafe_allow_html=True,
         )
-        st.caption("Estimativa exploratória baseada em desvios à tua própria linha de base; não é uma validação clínica nem substitui a tua perceção ou avaliação profissional.")
+    else:
+        st.markdown('<div class="apex-note apex-warn"><b>Prontidão não disponível</b><br>Sem registo de Training Readiness da Garmin para hoje. Executa a Sincronização Garmin no menu lateral.</div>', unsafe_allow_html=True)
 
     st.subheader("Interpretação dos sinais")
     st.write(f"**VRC:** {hrv_context['status']}. {hrv_context['explanation']}")
     if sleep_debt["avg_h"] is not None:
         st.write(f"Sono médio das noites registadas: **{sleep_debt['avg_h']:.1f} h** ({sleep_debt['nights']} noites disponíveis). O défice abaixo de 8 h é uma referência configurável, não uma necessidade individual determinada.")
-    if pd.notna(latest.get("GarminReadiness")):
-        st.write(f"Readiness comunicado pela Garmin: **{int(latest['GarminReadiness'])}/100**. É apresentado separadamente e não é misturado no score Apex.")
-
-    if readiness_data["score"] is not None:
-        contributions = pd.DataFrame(
-            [(k, v) for k, v in readiness_data["contributions"].items()],
-            columns=["Fator", "Contribuição (pontos)"],
-        )
-        fig = px.bar(contributions, x="Fator", y="Contribuição (pontos)", color="Contribuição (pontos)",
-                     color_continuous_scale="RdYlGn", title="Contribuição relativa dos sinais disponíveis")
-        fig.update_layout(template="plotly_dark")
-        st.plotly_chart(fig, use_container_width=True)
 
     st.subheader("Qualidade e origem dos dados")
-    st.write(f"Dias válidos de VRC antes de hoje: **{hrv_valid_days}**. Linha de base pessoal exige pelo menos 14 observações válidas.")
+    st.write(f"Dias válidos de VRC antes de hoje: **{hrv_valid_days}**.")
     source_cols = [("VRC", "hrv_source"), ("FC repouso", "rhr_source"),
                    ("Sono", "sleep_hours_source"), ("Score sono", "sleep_score_source")]
     st.table(pd.DataFrame([{"Métrica": name,
