@@ -79,6 +79,32 @@ def _fmt(value: Any, digits: int = 1, suffix: str = "") -> str:
     return f"{float(value):.{digits}f}{suffix}"
 
 
+def _fmt_hours_to_hm(hours_val: Optional[float]) -> str:
+    """Converte horas decimais (ex.: 7.8) para o formato '7h 48m'."""
+    if hours_val is None or pd.isna(hours_val) or hours_val <= 0:
+        return "—"
+    total_minutes = int(round(float(hours_val) * 60))
+    h = total_minutes // 60
+    m = total_minutes % 60
+    if h > 0 and m > 0:
+        return f"{h}h {m}m"
+    elif h > 0:
+        return f"{h}h"
+    return f"{m}m"
+
+
+def _fmt_minutes_diff(diff_min: Optional[float]) -> str:
+    """Converte a diferença em minutos para uma string clara de défice/excedente (ex.: '12 min')."""
+    if diff_min is None or pd.isna(diff_min):
+        return "—"
+    diff_val = int(round(float(diff_min)))
+    if diff_val > 0:
+        return f"{diff_val} min"
+    elif diff_val < 0:
+        return f"+{abs(diff_val)} min"
+    return "0 min"
+
+
 def _clean_number(value: Any) -> Optional[float]:
     try:
         v = float(value)
@@ -386,19 +412,19 @@ if not raw_daily.empty:
     raw_daily["Date"] = pd.to_datetime(raw_daily["date"])
     base_df = base_df.merge(raw_daily, on="Date", how="left")
 else:
-    for col in ["hrv", "rhr", "sleep_score", "sleep_hours", "soreness", "stress", "mood",
+    for col in ["hrv", "rhr", "sleep_score", "sleep_hours", "sleep_target_hours", "soreness", "stress", "mood",
                 "vendor_readiness", "hrv_source", "rhr_source", "sleep_score_source", "sleep_hours_source"]:
         base_df[col] = np.nan
 
-for col in ["hrv", "rhr", "sleep_score", "sleep_hours", "soreness", "stress", "mood", "vendor_readiness"]:
+for col in ["hrv", "rhr", "sleep_score", "sleep_hours", "sleep_target_hours", "soreness", "stress", "mood", "vendor_readiness"]:
     if col not in base_df:
         base_df[col] = np.nan
     base_df[col] = pd.to_numeric(base_df[col], errors="coerce")
 
 base_df = base_df.rename(columns={
     "hrv": "HRV", "rhr": "RHR", "sleep_score": "SleepScore", "sleep_hours": "SleepHours",
-    "soreness": "Soreness", "stress": "Stress", "mood": "Mood",
-    "vendor_readiness": "GarminReadiness",
+    "sleep_target_hours": "SleepTargetHours", "soreness": "Soreness", "stress": "Stress",
+    "mood": "Mood", "vendor_readiness": "GarminReadiness",
 })
 base_df["SubjectiveScore"] = [
     core.subjective_score(int(r.Soreness), int(r.Stress), int(r.Mood))
@@ -430,6 +456,7 @@ hrv_curr = _clean_number(base_df["HRV"].iloc[-1])
 rhr_curr = _clean_number(base_df["RHR"].iloc[-1])
 sleep_curr = _clean_number(base_df["SleepScore"].iloc[-1])
 sleep_hours_curr = _clean_number(base_df["SleepHours"].iloc[-1])
+sleep_target_curr = _clean_number(base_df["SleepTargetHours"].dropna().iloc[-1]) if not base_df["SleepTargetHours"].dropna().empty else 8.0
 garmin_readiness_curr = _clean_number(base_df["GarminReadiness"].dropna().iloc[-1]) if not base_df["GarminReadiness"].dropna().empty else None
 
 base_hrv = core.compute_baseline(base_df["HRV"], min_n=14, exclude_last=True)
@@ -445,7 +472,13 @@ readiness_data = core.compute_readiness(zs_today, mode=mode)
 score = int(garmin_readiness_curr) if garmin_readiness_curr is not None else readiness_data["score"]
 decision = core.decision_for(score) if score is not None else {"cap": "full", "headline": "Sem prontidão", "tone": "amber"}
 hrv_context = core.get_hrv_context(hrv_curr, hrv_mean, base_hrv.sd if base_hrv else None)
-sleep_debt = core.compute_sleep_debt(base_df["SleepHours"].tolist(), target=8.0, nights=7)
+
+# Cálculo dinâmico do défice/excedente em minutos comparado com a meta recomendada Garmin
+if sleep_hours_curr is not None:
+    diff_minutes = (sleep_target_curr - sleep_hours_curr) * 60.0
+else:
+    diff_minutes = None
+
 trend_info = core.calculate_trend(base_df["HRV"].tail(21).tolist())
 df_display = base_df.tail(window).copy()
 
@@ -513,10 +546,12 @@ if top_nav == "📌 Today / Decisão Diária":
               f"Base pessoal: {_fmt(hrv_mean, 1, ' ms')}" if hrv_mean is not None else "Base ainda indisponível")
     c2.metric("FC repouso", _fmt(rhr_curr, 0, " bpm"),
               f"Base pessoal: {_fmt(rhr_mean, 1, ' bpm')}" if rhr_mean is not None else "Base ainda indisponível")
-    c3.metric("Sono", _fmt(sleep_hours_curr, 1, " h"),
+    c3.metric("Sono", _fmt_hours_to_hm(sleep_hours_curr),
               f"Score: {_fmt(sleep_curr, 0)}" if sleep_curr is not None else "Score não registado")
-    c4.metric("Défice vs 8 h", _fmt(sleep_debt["debt_h"], 1, " h"),
-              f"{sleep_debt['nights']} noites registadas" if sleep_debt["nights"] else "Sem noites registadas")
+    
+    target_str = _fmt_hours_to_hm(sleep_target_curr)
+    c4.metric("Défice de sono", _fmt_minutes_diff(diff_minutes),
+              f"Meta Garmin recomendada: {target_str}" if sleep_target_curr else "Meta padrão 8h")
 
     st.divider()
 
@@ -548,8 +583,11 @@ if top_nav == "📌 Today / Decisão Diária":
 
     st.subheader("Interpretação dos sinais")
     st.write(f"**VRC:** {hrv_context['status']}. {hrv_context['explanation']}")
-    if sleep_debt["avg_h"] is not None:
-        st.write(f"Sono médio das noites registadas: **{sleep_debt['avg_h']:.1f} h** ({sleep_debt['nights']} noites disponíveis). O défice abaixo de 8 h é uma referência configurável, não uma necessidade individual determinada.")
+    if sleep_hours_curr is not None:
+        dur_str = _fmt_hours_to_hm(sleep_hours_curr)
+        tgt_str = _fmt_hours_to_hm(sleep_target_curr)
+        diff_str = _fmt_minutes_diff(diff_minutes)
+        st.write(f"Duração do sono da última noite: **{dur_str}** vs Meta recomendada Garmin: **{tgt_str}** (Défice/Excedente: **{diff_str}**).")
 
     st.subheader("Qualidade e origem dos dados")
     st.write(f"Dias válidos de VRC antes de hoje: **{hrv_valid_days}**.")
@@ -988,7 +1026,7 @@ elif top_nav == "🤖 Coach IA Apex (Gemini)":
                     "rhr_baseline_bpm": rhr_mean,
                     "sleep_hours": sleep_hours_curr,
                     "sleep_score": sleep_curr,
-                    "sleep_debt_vs_8h_last_7_logged_nights": sleep_debt["debt_h"],
+                    "sleep_debt_minutes": diff_minutes,
                     "load_model_available": bool(load_complete_42),
                     "ctl": _clean_number(base_df["CTL"].iloc[-1]),
                     "atl": _clean_number(base_df["ATL"].iloc[-1]),
