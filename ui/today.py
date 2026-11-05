@@ -8,6 +8,7 @@ import streamlit as st
 
 import data_store as store
 import engine_core as core
+from ui.pillar_recovery import render_pillar_recovery
 
 
 def _fmt(value: Any, digits: int = 1, suffix: str = "") -> str:
@@ -41,9 +42,7 @@ def render_today_page(base_df: pd.DataFrame, hrv_mean: Optional[float], rhr_mean
 
     latest = base_df.iloc[-1]
     
-    # -------------------------------------------------------------------------
-    # 1. HEADER & STATUS SUPERIOR (Sem Sidebar)
-    # -------------------------------------------------------------------------
+    # Header & Status Superior
     head_col1, head_col2 = st.columns([3, 1])
     with head_col1:
         st.markdown("<h1 style='margin-bottom:0;'>⚡ APEX</h1>", unsafe_allow_html=True)
@@ -62,7 +61,7 @@ def render_today_page(base_df: pd.DataFrame, hrv_mean: Optional[float], rhr_mean
 
     st.divider()
 
-    # Seletor de Foco de Performance e Configurações Rápidas (Substitui parte da Sidebar)
+    # Seletor de Foco de Performance e Configurações Rápidas
     f_col1, f_col2, f_col3 = st.columns([2, 1, 1])
     with f_col1:
         saved_mode = store.get_setting("mode", "performance")
@@ -77,7 +76,7 @@ def render_today_page(base_df: pd.DataFrame, hrv_mean: Optional[float], rhr_mean
             st.rerun()
 
     with f_col2:
-        with st.popover("👤 Perfil & Definções"):
+        with st.popover("👤 Perfil & Definições"):
             st.markdown("### Perfil de Atleta")
             prof = store.get_setting("profile", {}) or {}
             g_val = st.selectbox("Sexo", ["Não indicado", "Masculino", "Feminino"], index=0 if prof.get("gender") not in ["Masculino", "Feminino"] else ["Masculino", "Feminino"].index(prof.get("gender")) + 1)
@@ -98,9 +97,7 @@ def render_today_page(base_df: pd.DataFrame, hrv_mean: Optional[float], rhr_mean
                     sync_callback()
                     st.rerun()
 
-    # -------------------------------------------------------------------------
-    # 2. TODAY'S RECOMMENDATION & READINESS BANNER
-    # -------------------------------------------------------------------------
+    # Overview & Recommendation
     st.subheader("Today's Overview & Recommendation")
     
     if garmin_readiness_curr is not None:
@@ -111,30 +108,14 @@ def render_today_page(base_df: pd.DataFrame, hrv_mean: Optional[float], rhr_mean
             f'<div class="apex-note {tone_class}">'
             f'<span style="font-size:1.4rem; font-weight:800; color:#f8fafc;">Garmin Training Readiness: {g_score}/100</span><br>'
             f'<b>{escape(g_decision["headline"])}</b><br>'
-            f'<span class="muted">Os teus sinais fisiológicos indicam recuperação dentro da faixa. Confirma a carga antes da sessão.</span>'
+            f'<span class="muted">Recuperação autónoma estável. Verifica as sensações subjetivas antes da sessão.</span>'
             f'</div>',
             unsafe_allow_html=True
         )
-    elif score is not None:
-        tone_class = {"green": "apex-good", "amber": "apex-warn", "red": "apex-alert"}.get(decision["tone"], "")
-        st.markdown(
-            f'<div class="apex-note {tone_class}">'
-            f'<span style="font-size:1.4rem; font-weight:800; color:#f8fafc;">APEX Readiness Estimada: {score}/100</span><br>'
-            f'<b>{escape(decision["headline"])}</b>'
-            f'</div>',
-            unsafe_allow_html=True
-        )
-
-    with st.expander("WHY THIS RECOMMENDATION? (Análise de Sinais)", expanded=False):
-        st.write(f"• **VRC Noturna:** {hrv_context['status']}. {hrv_context['explanation']}")
-        st.write(f"• **FC de Repouso:** {'Estável' if (rhr_curr and rhr_mean and rhr_curr <= rhr_mean) else 'Elevada ligeiramente vs baseline'}")
-        st.write(f"• **Défice de Sono:** {_fmt_minutes_diff(diff_minutes)}")
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # -------------------------------------------------------------------------
-    # 3. YOUR FIVE KEY METRICS
-    # -------------------------------------------------------------------------
+    # Dashboard Metrics (5 Cartões Principais)
     st.subheader("Your Five Key Metrics")
 
     garmin_weekly_avg = latest.get("hrv_weekly_avg") if pd.notna(latest.get("hrv_weekly_avg")) else None
@@ -143,30 +124,27 @@ def render_today_page(base_df: pd.DataFrame, hrv_mean: Optional[float], rhr_mean
     if pd.isna(hrv_sd) or hrv_sd == 0:
         hrv_sd = 5.0
 
-    # VRC Badge logic
     if hrv_curr is not None and effective_vrc_base is not None:
         z_vrc = (hrv_curr - effective_vrc_base) / hrv_sd
         base_label_type = "Média 7d Garmin" if garmin_weekly_avg is not None else "Base pessoal"
         hrv_badge_txt = f"{base_label_type}: {effective_vrc_base:.0f} ms (Z: {z_vrc:+.1f})"
-        hrv_badge_bg = "rgba(16, 185, 129, 0.2)" if abs(z_vrc) <= 1.0 else "rgba(234, 179, 8, 0.2)" if z_vrc > 1.0 else "rgba(239, 68, 68, 0.2)"
-        hrv_badge_color = "#34d399" if abs(z_vrc) <= 1.0 else "#facc15" if z_vrc > 1.0 else "#f87171"
+        hrv_badge_bg = "rgba(16, 185, 129, 0.2)" if abs(z_vrc) <= 1.0 else "rgba(234, 179, 8, 0.2)"
+        hrv_badge_color = "#34d399" if abs(z_vrc) <= 1.0 else "#facc15"
     else:
         hrv_badge_txt = "A recolher dados..."
         hrv_badge_bg = "rgba(148, 163, 184, 0.15)"
         hrv_badge_color = "#94a3b8"
 
-    # RHR Badge logic
     if rhr_curr is not None and rhr_mean is not None:
         rhr_diff = rhr_curr - rhr_mean
         rhr_badge_txt = f"{rhr_diff:+.1f} bpm vs base ({rhr_mean:.1f})"
-        rhr_badge_bg = "rgba(16, 185, 129, 0.2)" if rhr_diff <= 0 else "rgba(249, 115, 22, 0.2)" if rhr_diff <= 2.0 else "rgba(239, 68, 68, 0.2)"
-        rhr_badge_color = "#34d399" if rhr_diff <= 0 else "#fb923c" if rhr_diff <= 2.0 else "#f87171"
+        rhr_badge_bg = "rgba(16, 185, 129, 0.2)" if rhr_diff <= 0 else "rgba(249, 115, 22, 0.2)"
+        rhr_badge_color = "#34d399" if rhr_diff <= 0 else "#fb923c"
     else:
         rhr_badge_txt = "A recolher dados..."
         rhr_badge_bg = "rgba(148, 163, 184, 0.15)"
         rhr_badge_color = "#94a3b8"
 
-    # Sleep Badge logic
     if diff_minutes is not None:
         diff_badge_txt = f"Faltam {int(diff_minutes)} min" if diff_minutes > 0 else f"+{abs(int(diff_minutes))} min meta"
         diff_badge_bg = "rgba(239, 68, 68, 0.2)" if diff_minutes > 0 else "rgba(16, 185, 129, 0.2)"
@@ -226,20 +204,18 @@ def render_today_page(base_df: pd.DataFrame, hrv_mean: Optional[float], rhr_mean
     st.markdown("<br>", unsafe_allow_html=True)
 
     # -------------------------------------------------------------------------
-    # 4. OS TRÊS PILARES PRINCIPAIS (DASHBOARD LAYOUT)
+    # RENDERIZAR PILAR 1 DETALHADO
     # -------------------------------------------------------------------------
+    render_pillar_recovery(
+        base_df=base_df, hrv_mean=hrv_mean, rhr_mean=rhr_mean,
+        hrv_curr=hrv_curr, rhr_curr=rhr_curr, sleep_curr=sleep_curr,
+        sleep_hours_curr=sleep_hours_curr, sleep_target_curr=sleep_target_curr,
+        garmin_readiness_curr=garmin_readiness_curr, score=score,
+        decision=decision, hrv_context=hrv_context, diff_minutes=diff_minutes,
+        hrv_valid_days=hrv_valid_days
+    )
 
-    # PILAR 01 — RECOVERY & READINESS
-    st.markdown("### 01 — Recovery & Readiness")
-    st.caption("Sleep · HRV · RHR · Stress · Subjective recovery")
-    with st.expander("View recovery trends and detailed signals ↓", expanded=False):
-        st.markdown("#### Tendência da VRC Noturna & FC de Repouso")
-        chart_df = base_df.tail(28).copy()
-        if not chart_df["HRV"].dropna().empty:
-            chart_df["HRV_EWMA"] = chart_df["HRV"].ewm(span=7, adjust=False, min_periods=2).mean()
-            st.line_chart(chart_df.set_index("Date")[["HRV", "HRV_EWMA"]])
-        else:
-            st.info("Sem dados de VRC suficientes para exibir o gráfico de tendência.")
+    st.markdown("<br>", unsafe_allow_html=True)
 
     # PILAR 02 — TRAINING & PERFORMANCE
     st.markdown("### 02 — Training & Performance")
@@ -261,12 +237,8 @@ def render_today_page(base_df: pd.DataFrame, hrv_mean: Optional[float], rhr_mean
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # -------------------------------------------------------------------------
-    # 5. FUEL, HYDRATE & RECOVER / COACH INSIGHT
-    # -------------------------------------------------------------------------
+    # Coach & Nutrition
     st.markdown("### Fuel, Hydrate & Recover")
-    st.caption("Daily energy · Protein · Carbohydrates · Hydration · Workout fueling")
-    
     n1, n2, n3, n4 = st.columns(4)
     n1.metric("Energia Diária", "2,450 kcal")
     n2.metric("Proteína", "165g", "Meta 2.0g/kg")
@@ -275,4 +247,4 @@ def render_today_page(base_df: pd.DataFrame, hrv_mean: Optional[float], rhr_mean
 
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown("### 🤖 Coach Insight")
-    st.info("Sinais de recuperação excelentes. A VRC noturna encontra-se estabilizada na faixa de homeostase (Z: +0.5). Mantém o plano de treino de ciclismo com boa ingestão de carboidratos intramusculares.")
+    st.info("Sinais autónomos favoráveis. A VRC noturna e a FC de repouso estão em homeostase. Confirma apenas o nível de dor muscular (DOMS) no check-in antes de iniciar estímulos de alta intensidade.")
