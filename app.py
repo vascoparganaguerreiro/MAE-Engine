@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import io
 import os
+import zipfile
 from datetime import date, datetime, timedelta
 from html import escape
-from typing import Any, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -94,11 +96,10 @@ def _garmin_sync_callback() -> None:
         store.set_setting("garmin_last_sync", datetime.now().isoformat(timespec="seconds"))
         st.session_state["garmin_sync_result"] = {
             "ok": True,
-            "message": "Sincronização concluída. Só foram guardadas métricas efetivamente recebidas.",
+            "message": "Sincronização concluída. Dias em falta atualizados no SQLite.",
             "warnings": warnings,
         }
     except Exception as exc:
-        # Do not echo credentials or raw third-party response bodies into the UI.
         st.session_state["garmin_sync_result"] = {
             "ok": False,
             "message": f"A sincronização falhou ({type(exc).__name__}). Confirma as credenciais e o acesso à Garmin.",
@@ -107,6 +108,43 @@ def _garmin_sync_callback() -> None:
     finally:
         st.session_state["garmin_email_input"] = ""
         st.session_state["garmin_password_input"] = ""
+
+
+def _parse_garmin_csv(df: pd.DataFrame) -> List[Dict[str, Any]]:
+    """Parser universal para relatórios exportados do Garmin Connect."""
+    records: List[Dict[str, Any]] = []
+    df.columns = [str(c).strip().lower() for c in df.columns]
+
+    date_col = next((c for c in df.columns if "data" in c or "date" in c or "day" in c), None)
+    if not date_col:
+        return records
+
+    hrv_col = next((c for c in df.columns if "hrv" in c or "vrc" in c), None)
+    rhr_col = next((c for c in df.columns if "rhr" in c or "repouso" in c or "resting" in c), None)
+    sleep_score_col = next((c for c in df.columns if "sleep score" in c or "pontuação do sono" in c), None)
+    sleep_hours_col = next((c for c in df.columns if "sleep time" in c or "horas de sono" in c or "duration" in c), None)
+
+    for _, row in df.iterrows():
+        try:
+            d_val = pd.to_datetime(row[date_col]).date().isoformat()
+        except Exception:
+            continue
+
+        rec: Dict[str, Any] = {"date": d_val}
+        if hrv_col and pd.notna(row[hrv_col]):
+            rec["hrv"] = _clean_number(row[hrv_col])
+        if rhr_col and pd.notna(row[rhr_col]):
+            rec["rhr"] = _clean_number(row[rhr_col])
+        if sleep_score_col and pd.notna(row[sleep_score_col]):
+            rec["sleep_score"] = _clean_number(row[sleep_score_col])
+        if sleep_hours_col and pd.notna(row[sleep_hours_col]):
+            h_val = _clean_number(row[sleep_hours_col])
+            rec["sleep_hours"] = round(h_val / 3600.0, 2) if h_val and h_val > 24 else h_val
+
+        if len(rec) > 1:
+            records.append(rec)
+
+    return records
 
 
 # -----------------------------------------------------------------------------
@@ -163,6 +201,32 @@ with st.sidebar.expander("⚙️ Parâmetros CTL / ATL", expanded=False):
     store.set_setting("ctl_tc", ctl_tc)
     store.set_setting("atl_tc", atl_tc)
 
+with st.sidebar.expander("📂 Importar Histórico (1 clique)", expanded=False):
+    st.caption("Carrega o ficheiro CSV ou ZIP exportado do Garmin Connect para povoar o histórico de uma só vez.")
+    uploaded_file = st.file_uploader("Ficheiro Garmin (CSV/ZIP)", type=["csv", "zip"])
+    if uploaded_file is not None:
+        try:
+            all_records: List[Dict[str, Any]] = []
+            if uploaded_file.name.endswith(".zip"):
+                with zipfile.ZipFile(uploaded_file) as z:
+                    for filename in z.namelist():
+                        if filename.endswith(".csv"):
+                            with z.open(filename) as f:
+                                df_temp = pd.read_csv(f)
+                                all_records.extend(_parse_garmin_csv(df_temp))
+            else:
+                df_temp = pd.read_csv(uploaded_file)
+                all_records.extend(_parse_garmin_csv(df_temp))
+
+            if all_records:
+                inserted = store.bulk_insert_garmin_history(all_records)
+                st.success(f"Histórico importado com sucesso! {inserted} registos guardados no SQLite.")
+                st.rerun()
+            else:
+                st.error("Não foram encontradas colunas de métricas reconhecidas no ficheiro.")
+        except Exception as exc:
+            st.error(f"Erro ao processar ficheiro: {exc}")
+
 with st.sidebar.expander("⌚ Sincronização Garmin", expanded=False):
     st.caption("As credenciais são usadas apenas durante esta sincronização e não são guardadas na base de dados.")
     with st.form("garmin_sync_form", clear_on_submit=True):
@@ -177,7 +241,7 @@ with st.sidebar.expander("⌚ Sincronização Garmin", expanded=False):
     last_sync = store.get_setting("garmin_last_sync")
     if last_sync:
         st.caption(f"Última sincronização: {last_sync}")
-    st.caption("A integração usa uma biblioteca não oficial da Garmin Connect. A Garmin pode alterar endpoints ou autenticação.")
+    st.caption("A integração usa a biblioteca Garmin Connect. Dias em falta são automaticamente recuperados.")
 
 st.sidebar.divider()
 if mode == "performance":
@@ -215,7 +279,7 @@ st.sidebar.caption("Apex local · dados pessoais armazenados em SQLite")
 # -----------------------------------------------------------------------------
 today = date.today()
 start_day = today - timedelta(days=60)
-dates = pd.date_range(start=start_day, end=today, freq="D")  # 61 dates: today + 60-day baseline window
+dates = pd.date_range(start=start_day, end=today, freq="D")
 raw_daily = store.fetch_daily_metrics(start_day, today)
 raw_training = store.fetch_training_days(start_day, today)
 
@@ -252,7 +316,6 @@ if not raw_training.empty:
 else:
     base_df["source"] = np.nan
 
-# CTL/ATL need 42 consecutive explicitly logged training days. A blank day is not assumed to be rest.
 LOAD_WINDOW = 42
 last42_loads = base_df["DailyLoad"].tail(LOAD_WINDOW)
 load_complete_42 = len(last42_loads) == LOAD_WINDOW and last42_loads.notna().all()
@@ -285,7 +348,6 @@ sleep_debt = core.compute_sleep_debt(base_df["SleepHours"].tolist(), target=8.0,
 trend_info = core.calculate_trend(base_df["HRV"].tail(21).tolist())
 df_display = base_df.tail(window).copy()
 
-# User/profile values are optional. No physiological profile defaults are invented.
 profile = store.get_setting("profile", {}) or {}
 user_age = _clean_number(profile.get("age"))
 user_weight = _clean_number(profile.get("weight_kg"))
@@ -293,7 +355,6 @@ user_vo2 = _clean_number(profile.get("vo2max"))
 user_hrmax = _clean_number(profile.get("hr_max"))
 user_gender = profile.get("gender", "Não indicado")
 
-# Top banner
 st.title("⚡ Apex Engine")
 st.caption(f"Performance, saúde e longevidade · {mode_label} · {calib_label}")
 st.info(
@@ -393,7 +454,7 @@ elif top_nav == "📈 Tendência de VRC & Gráficos":
     chart_df = df_display.dropna(subset=["HRV"]).copy()
     overlay_rhr = st.checkbox("Sobrepor FC de repouso", value=True)
     if chart_df.empty:
-        st.info("Ainda não existem registos de VRC no período selecionado. Sincroniza a Garmin ou introduz os dados no Daily Check-In.")
+        st.info("Ainda não existem registos de VRC no período selecionado. Importa o histórico ou sincroniza a Garmin.")
     else:
         chart_df["HRV_EWMA"] = chart_df["HRV"].ewm(span=7, adjust=False, min_periods=3).mean()
         fig = go.Figure()
