@@ -88,22 +88,29 @@ def _clean_number(value: Any) -> Optional[float]:
 
 
 def _garmin_sync_callback() -> None:
-    """Callback runs before the next script render; credentials are then cleared."""
+    """Callback que executa a sincronização com a conta Garmin Connect."""
     email = str(st.session_state.get("garmin_email_input", "")).strip()
     password = str(st.session_state.get("garmin_password_input", ""))
     try:
         metrics, warnings = fetch_garmin_metrics(email, password, date.today())
-        store.upsert_daily_metrics(date.today(), metrics, source="garmin")
-        store.set_setting("garmin_last_sync", datetime.now().isoformat(timespec="seconds"))
-        st.session_state["garmin_sync_result"] = {
-            "ok": True,
-            "message": "Sincronização concluída. Dias em falta atualizados no SQLite.",
-            "warnings": warnings,
-        }
+        if metrics:
+            store.upsert_daily_metrics(date.today(), metrics, source="garmin")
+            store.set_setting("garmin_last_sync", datetime.now().isoformat(timespec="seconds"))
+            st.session_state["garmin_sync_result"] = {
+                "ok": True,
+                "message": "Sincronização concluída com sucesso! Métricas atualizadas no SQLite.",
+                "warnings": warnings,
+            }
+        else:
+            st.session_state["garmin_sync_result"] = {
+                "ok": False,
+                "message": "A Garmin respondeu, mas não foram encontradas métricas para o dia de hoje.",
+                "warnings": warnings,
+            }
     except Exception as exc:
         st.session_state["garmin_sync_result"] = {
             "ok": False,
-            "message": f"A sincronização falhou ({type(exc).__name__}). Confirma as credenciais e o acesso à Garmin.",
+            "message": f"A sincronização falhou ({type(exc).__name__}). Confirma as tuas credenciais.",
             "warnings": [],
         }
     finally:
@@ -192,17 +199,17 @@ def _parse_garmin_file_content(file_name: str, content: bytes) -> List[Dict[str,
                     if hrv_val is not None:
                         rec["hrv"] = _clean_number(hrv_val)
 
-                    # Garmin Training Readiness (Oficial da Garmin)
+                    # Training Readiness
                     readiness_val = (
                         item.get("score")
                         or item.get("trainingReadinessScore")
                         or item.get("scoreValue")
                         or item.get("userDailyTrainingReadinessDTO", {}).get("score")
                     )
-                    if readiness_val is not None and ("readiness" in fname_lower or "training" in fname_lower or "userdaily" in fname_lower):
+                    if readiness_val is not None:
                         rec["vendor_readiness"] = _clean_number(readiness_val)
 
-                    # Sono (Horas e Score) - Deteção abrangente de todas as estruturas JSON de sono Garmin
+                    # Sono (Horas e Score)
                     sleep_dto = item.get("userDailySleepDTO") or item
                     sleep_sec = (
                         sleep_dto.get("sleepTimeSeconds")
@@ -415,7 +422,8 @@ hrv_curr = _clean_number(base_df["HRV"].iloc[-1])
 rhr_curr = _clean_number(base_df["RHR"].iloc[-1])
 sleep_curr = _clean_number(base_df["SleepScore"].iloc[-1])
 sleep_hours_curr = _clean_number(base_df["SleepHours"].iloc[-1])
-garmin_readiness_curr = _clean_number(base_df["GarminReadiness"].iloc[-1])
+garmin_readiness_curr = _clean_number(base_df["GarminReadiness"].dropna().iloc[-1]) if not base_df["GarminReadiness"].dropna().empty else None
+
 base_hrv = core.compute_baseline(base_df["HRV"], min_n=14, exclude_last=True)
 base_rhr = core.compute_baseline(base_df["RHR"], min_n=14, exclude_last=True)
 hrv_mean = base_hrv.mean if base_hrv else None
@@ -426,9 +434,9 @@ calib_state, calib_label = core.DataQualityEngine.get_calibration_state(hrv_vali
 zs_today = core.zscores_for_day(base_df, -1)
 readiness_data = core.compute_readiness(zs_today, mode=mode)
 
-# Forçar a Prontidão a usar a métrica direta da Garmin se disponível
+# Forçar o valor do score principal a ser a Prontidão da Garmin se existente
 score = int(garmin_readiness_curr) if garmin_readiness_curr is not None else readiness_data["score"]
-decision = core.decision_for(score)
+decision = core.decision_for(score) if score is not None else {"cap": "full", "headline": "Sem prontidão", "tone": "amber"}
 hrv_context = core.get_hrv_context(hrv_curr, hrv_mean, base_hrv.sd if base_hrv else None)
 sleep_debt = core.compute_sleep_debt(base_df["SleepHours"].tolist(), target=8.0, nights=7)
 trend_info = core.calculate_trend(base_df["HRV"].tail(21).tolist())
@@ -494,8 +502,8 @@ if top_nav == "📌 Today / Decisão Diária":
               f"{sleep_debt['nights']} noites registadas" if sleep_debt["nights"] else "Sem noites registadas")
 
     st.divider()
-    
-    # Apresentação da Prontidão com prioridade ao Training Readiness oficial da Garmin
+
+    # Bloco de Prontidão Principal
     if garmin_readiness_curr is not None:
         g_score = int(garmin_readiness_curr)
         g_decision = core.decision_for(g_score)
@@ -503,7 +511,7 @@ if top_nav == "📌 Today / Decisão Diária":
         st.markdown(
             f'<div class="apex-note {tone_class}"><b>{escape(g_decision["headline"])}</b><br>'
             f'<span style="font-size:1.5rem;font-weight:800">Garmin Training Readiness: {g_score}/100</span><br>'
-            f'<span class="muted">Métrica direta importada da Garmin Connect</span></div>',
+            f'<span class="muted">Métrica oficial sincronizada diretamente da Garmin Connect</span></div>',
             unsafe_allow_html=True,
         )
     elif score is not None:
@@ -515,7 +523,11 @@ if top_nav == "📌 Today / Decisão Diária":
             unsafe_allow_html=True,
         )
     else:
-        st.markdown('<div class="apex-note apex-warn"><b>Prontidão não disponível</b><br>Sem registo de Training Readiness da Garmin para hoje. Executa a Sincronização Garmin no menu lateral.</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="apex-note apex-warn"><b>Prontidão não disponível</b><br>'
+            'Prime a opção <b>Sincronizar dados disponíveis</b> no menu lateral (Sincronização Garmin) para descarregar o Training Readiness diretamente da tua conta.</div>',
+            unsafe_allow_html=True,
+        )
 
     st.subheader("Interpretação dos sinais")
     st.write(f"**VRC:** {hrv_context['status']}. {hrv_context['explanation']}")
@@ -707,15 +719,15 @@ elif top_nav == "🧬 Biomarcadores & Healthspan":
         st.info("Para categorizar VO2max, completa idade, sexo de referência e VO2max no Perfil.")
 
     rhr_recent = base_df["RHR"].tail(14).dropna()
-    rhr_mean_recent = float(rhr_recent.mean()) if len(rhr_recent) >= 7 else None
+    rhr_mean_recent = float(rhr_recent.mean()) if len(rhr_recent) >= 1 else None
     sleep_recent = base_df["SleepHours"].tail(7).dropna()
-    sleep_sd = float(sleep_recent.std(ddof=1)) if len(sleep_recent) >= 4 else None
+    sleep_sd = float(sleep_recent.std(ddof=1)) if len(sleep_recent) >= 2 else (0.0 if len(sleep_recent) == 1 else None)
     workouts_7 = store.fetch_workouts(today - timedelta(days=6), today)
     active_min = float(workouts_7["duration_min"].sum()) if not workouts_7.empty else None
     hs = core.healthspan_score(vo2_points, rhr_mean_recent, sleep_sd, active_min)
     h1, h2, h3 = st.columns(3)
     h1.metric("FC repouso · média registada", _fmt(rhr_mean_recent, 1, " bpm"))
-    h2.metric("Variabilidade da duração do sono", _fmt(sleep_sd, 2, " h"))
+    h2.metric("Variabilidade da duração do sono", _fmt(sleep_sd, 2, " h") if sleep_sd is not None else "Acumular >1 noite")
     h3.metric("Minutos de treino registados · 7d", _fmt(active_min, 0, " min"))
     st.metric("Índice composto experimental", f"{hs['score']}/100" if hs["score"] is not None else "—")
     st.caption("Índice heurístico transparente e incompleto quando faltam dados. Não é uma idade biológica, score clínico, prognóstico ou medida validada de longevidade.")
