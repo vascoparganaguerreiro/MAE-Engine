@@ -128,7 +128,7 @@ def _run_garmin_sync() -> bool:
 
 
 def _parse_garmin_file_content(file_name: str, content: bytes) -> List[Dict[str, Any]]:
-    """Parser abrangente para relatórios exportados do Garmin Connect (CSV e JSON GDPR)."""
+    """Parser para relatórios exportados do Garmin Connect (CSV e JSON)."""
     records: List[Dict[str, Any]] = []
     fname_lower = file_name.lower()
 
@@ -206,7 +206,6 @@ def _parse_garmin_file_content(file_name: str, content: bytes) -> List[Dict[str,
                         item.get("lastNightAvg")
                         or item.get("hrvSummary", {}).get("lastNightAvg")
                         or item.get("weeklyAvg")
-                        or item.get("lastNight5MinHigh")
                     )
                     if hrv_val is not None:
                         rec["hrv"] = _clean_number(hrv_val)
@@ -215,7 +214,6 @@ def _parse_garmin_file_content(file_name: str, content: bytes) -> List[Dict[str,
                         item.get("score")
                         or item.get("trainingReadinessScore")
                         or item.get("scoreValue")
-                        or item.get("userDailyTrainingReadinessDTO", {}).get("score")
                     )
                     if readiness_val is not None:
                         rec["vendor_readiness"] = _clean_number(readiness_val)
@@ -224,9 +222,7 @@ def _parse_garmin_file_content(file_name: str, content: bytes) -> List[Dict[str,
                     sleep_sec = (
                         sleep_dto.get("sleepTimeSeconds")
                         or sleep_dto.get("totalSleepHours")
-                        or sleep_dto.get("unmeasurableSleepSeconds")
                         or item.get("sleepTimeSeconds")
-                        or item.get("totalSleepSeconds")
                     )
                     if sleep_sec is not None:
                         sec_num = _clean_number(sleep_sec)
@@ -236,7 +232,6 @@ def _parse_garmin_file_content(file_name: str, content: bytes) -> List[Dict[str,
                     sleep_score = (
                         sleep_dto.get("sleepScores", {}).get("overall", {}).get("value")
                         or sleep_dto.get("overallScore")
-                        or item.get("overallScore")
                     )
                     if sleep_score is not None:
                         rec["sleep_score"] = _clean_number(sleep_score)
@@ -570,22 +565,23 @@ if top_nav == "📌 Today / Decisão Diária":
 elif top_nav == "📈 Tendência de VRC & Gráficos":
     st.subheader("📈 Tendência da variabilidade da frequência cardíaca")
     
-    # Exibe botão para puxar histórico completo da Garmin se houver pouca VRC
-    if hrv_valid_days < 7:
-        if st.button("📥 Descarregar Histórico de VRC de 60 Dias da Garmin Connect", use_container_width=True):
-            email = _secret("GARMIN_EMAIL")
-            password = _secret("GARMIN_PASSWORD")
-            if email and password:
-                with st.spinner("A transferir histórico de VRC e FC de repouso dos últimos 60 dias..."):
-                    recs = fetch_historical_metrics(email, password, days=60)
+    if st.button("📥 Descarregar Histórico Recente (VRC e FC de Repouso)", use_container_width=True):
+        email = _secret("GARMIN_EMAIL")
+        password = _secret("GARMIN_PASSWORD")
+        if email and password:
+            with st.spinner("A transferir dados históricos dos últimos 30 dias..."):
+                try:
+                    recs = fetch_historical_metrics(email, password, days=30)
                     if recs:
-                        store.bulk_insert_garmin_history(recs)
-                        st.success(f"{len(recs)} dias de histórico importados com sucesso!")
+                        inserted = store.bulk_insert_garmin_history(recs)
+                        st.success(f"{inserted} registos históricos guardados com sucesso!")
                         st.rerun()
                     else:
-                        st.error("Não foi possível recuperar o histórico de VRC.")
-            else:
-                st.error("Configura as credenciais nos Secrets do Streamlit para descarregar o histórico.")
+                        st.warning("A Garmin não retornou novos dados para o período solicitado.")
+                except Exception as exc:
+                    st.error(f"Erro ao descarregar histórico: {exc}")
+        else:
+            st.error("Configura as credenciais nos Secrets do Streamlit para descarregar o histórico.")
 
     chart_df = df_display.copy()
     overlay_rhr = st.checkbox("Sobrepor FC de repouso", value=True)
@@ -602,7 +598,6 @@ elif top_nav == "📈 Tendência de VRC & Gráficos":
                           annotation_text="±1 DP da base pessoal", annotation_position="top left")
             fig.add_hline(y=base_hrv.mean, line_dash="dot", line_color="#10B981", name="Média pessoal")
             
-        # Linha de VRC (liga os pontos válidos)
         vrc_data = chart_df.dropna(subset=["HRV"])
         if not vrc_data.empty:
             fig.add_trace(go.Scatter(x=vrc_data["Date"], y=vrc_data["HRV"], mode="lines+markers",
@@ -623,7 +618,7 @@ elif top_nav == "📈 Tendência de VRC & Gráficos":
 
     st.subheader("Tendência estatística")
     if trend_info["n"] < 7:
-        st.info(f"{trend_info['text']} — {trend_info['n']} observações válidas de VRC; clica no botão de importar histórico acima para preencher os dias em falta.")
+        st.info(f"{trend_info['text']} — {trend_info['n']} observações válidas de VRC; clica no botão de descarregar histórico acima para preencher os dias em falta.")
     else:
         st.write(f"{trend_info['text']}. Inclinação estimada: **{trend_info['slope']:.2f} ms/dia**; IC aproximado 95%: {trend_info['ci_low']:.2f} a {trend_info['ci_high']:.2f}; n={trend_info['n']}.")
         st.caption("Uma tendência estatística não identifica a causa e não determina, isoladamente, a prontidão para treinar.")
