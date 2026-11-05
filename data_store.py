@@ -11,7 +11,7 @@ import sqlite3
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-
+import numpy as np
 import pandas as pd
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -19,7 +19,7 @@ DEFAULT_DB = BASE_DIR / "apex_data.db"
 DB_PATH = Path(os.environ.get("APEX_DB_PATH", str(DEFAULT_DB))).expanduser()
 
 DAILY_FIELDS = [
-    "hrv", "rhr", "sleep_score", "sleep_hours", "sleep_target_hours",
+    "hrv", "rhr", "sleep_score", "sleep_hours", "sleep_target_hours", "hrv_weekly_avg",
     "soreness", "stress", "mood", "vendor_readiness",
     "hrv_source", "rhr_source", "sleep_score_source", "sleep_hours_source", "vendor_readiness_source"
 ]
@@ -37,7 +37,6 @@ def init_db():
     with get_connection() as conn:
         cursor = conn.cursor()
         
-        # Tabela diária de métricas
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS daily_metrics (
                 date TEXT PRIMARY KEY,
@@ -46,6 +45,7 @@ def init_db():
                 sleep_score REAL,
                 sleep_hours REAL,
                 sleep_target_hours REAL,
+                hrv_weekly_avg REAL,
                 soreness INTEGER,
                 stress INTEGER,
                 mood INTEGER,
@@ -59,15 +59,16 @@ def init_db():
             );
         """)
 
-        # Migração automática de schema
+        # Migração automática de colunas
         cursor.execute("PRAGMA table_info(daily_metrics);")
         columns = [row["name"] for row in cursor.fetchall()]
         if "sleep_target_hours" not in columns:
             cursor.execute("ALTER TABLE daily_metrics ADD COLUMN sleep_target_hours REAL;")
+        if "hrv_weekly_avg" not in columns:
+            cursor.execute("ALTER TABLE daily_metrics ADD COLUMN hrv_weekly_avg REAL;")
         if "vendor_readiness_source" not in columns:
             cursor.execute("ALTER TABLE daily_metrics ADD COLUMN vendor_readiness_source TEXT;")
 
-        # Tabela de carga de treino diária
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS training_days (
                 date TEXT PRIMARY KEY,
@@ -77,8 +78,6 @@ def init_db():
                 updated_at TEXT
             );
         """)
-
-        # Tabela de treinos individuais (sRPE)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS workouts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -90,16 +89,12 @@ def init_db():
                 created_at TEXT
             );
         """)
-
-        # Definções do utilizador
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
                 value TEXT
             );
         """)
-
-        # Biomarcadores de saúde e longevidade
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS biomarkers (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -112,8 +107,6 @@ def init_db():
                 note TEXT
             );
         """)
-
-        # Provas e eventos (Race Hub)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS races (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -124,8 +117,6 @@ def init_db():
                 event_type TEXT
             );
         """)
-
-        # Sapatilhas e equipamento
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS shoes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -183,7 +174,6 @@ def upsert_daily_metrics(target_date: date, metrics: Dict[str, Any], source: str
         
         for k, v in metrics.items():
             if k in DAILY_FIELDS:
-                # Preserva valores existentes se a nova métrica for nula / N/A
                 if v is not None and not (isinstance(v, float) and np.isnan(v)):
                     data[k] = v
                     if source:
@@ -217,7 +207,7 @@ def bulk_insert_garmin_history(records: List[Dict[str, Any]]) -> int:
             existing = cursor.fetchone()
             data: Dict[str, Any] = dict(existing) if existing else {"date": d_str}
             
-            for k in ["hrv", "rhr", "sleep_score", "sleep_hours", "sleep_target_hours", "vendor_readiness"]:
+            for k in ["hrv", "rhr", "sleep_score", "sleep_hours", "sleep_target_hours", "hrv_weekly_avg", "vendor_readiness"]:
                 if r.get(k) is not None:
                     data[k] = r[k]
                     data[f"{k}_source"] = "garmin_import"
