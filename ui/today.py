@@ -3,12 +3,14 @@ from __future__ import annotations
 from datetime import date
 from html import escape
 from typing import Any, Dict, Optional
+import numpy as np
 import pandas as pd
 import streamlit as st
 
 import data_store as store
 import engine_core as core
 from ui.pillar_recovery import render_pillar_recovery
+from ui.pillar_training import render_pillar_training
 
 
 def _fmt(value: Any, digits: int = 1, suffix: str = "") -> str:
@@ -42,7 +44,9 @@ def render_today_page(base_df: pd.DataFrame, hrv_mean: Optional[float], rhr_mean
 
     latest = base_df.iloc[-1]
     
-    # Header & Status Superior
+    # -------------------------------------------------------------------------
+    # 1. HEADER & STATUS SUPERIOR (Sem Sidebar)
+    # -------------------------------------------------------------------------
     head_col1, head_col2 = st.columns([3, 1])
     with head_col1:
         st.markdown("<h1 style='margin-bottom:0;'>⚡ APEX</h1>", unsafe_allow_html=True)
@@ -70,7 +74,7 @@ def render_today_page(base_df: pd.DataFrame, hrv_mean: Optional[float], rhr_mean
             ["🏃 Performance (Atleta)", "🧘‍♂️ Health & Wellness", "🧬 Longevidade & Saúde Metabólica"],
             index=0 if saved_mode == "performance" else 1 if saved_mode == "wellness" else 2
         )
-        new_mode = "performance" if mode_opt.startswith("🏃") else "wellness" if mode_opt.startswith("🧘") else "longevity"
+        new_mode = "performance" if mode_opt.startswith("🏃") else "wellness" if mode_opt.startswith("🧬") else "longevity"
         if new_mode != saved_mode:
             store.set_setting("mode", new_mode)
             st.rerun()
@@ -97,7 +101,9 @@ def render_today_page(base_df: pd.DataFrame, hrv_mean: Optional[float], rhr_mean
                     sync_callback()
                     st.rerun()
 
-    # Overview & Recommendation
+    # -------------------------------------------------------------------------
+    # 2. TODAY'S OVERVIEW & RECOMMENDATION
+    # -------------------------------------------------------------------------
     st.subheader("Today's Overview & Recommendation")
     
     if garmin_readiness_curr is not None:
@@ -115,7 +121,9 @@ def render_today_page(base_df: pd.DataFrame, hrv_mean: Optional[float], rhr_mean
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Dashboard Metrics (5 Cartões Principais)
+    # -------------------------------------------------------------------------
+    # 3. YOUR FIVE KEY METRICS
+    # -------------------------------------------------------------------------
     st.subheader("Your Five Key Metrics")
 
     garmin_weekly_avg = latest.get("hrv_weekly_avg") if pd.notna(latest.get("hrv_weekly_avg")) else None
@@ -187,7 +195,7 @@ def render_today_page(base_df: pd.DataFrame, hrv_mean: Optional[float], rhr_mean
         st.markdown(f"""
         <div style="background:#131a27; border:1px solid #263244; padding:12px; border-radius:12px;">
             <span style="color:#94a3b8; font-size:0.8rem;">Training Load</span><br>
-            <span style="font-size:1.6rem; font-weight:700; color:#e2e8f0;">—</span><br>
+            <span style="font-size:1.6rem; font-weight:700; color:#e2e8f0;">{_fmt(base_df["DailyLoad"].iloc[-1] if "DailyLoad" in base_df else None, 0, " UA")}</span><br>
             <div style="margin-top:4px; padding:2px 6px; border-radius:4px; background:rgba(148, 163, 184, 0.15); color:#94a3b8; font-size:0.72rem; font-weight:600;">Sessões registadas</div>
         </div>
         """, unsafe_allow_html=True)
@@ -204,7 +212,7 @@ def render_today_page(base_df: pd.DataFrame, hrv_mean: Optional[float], rhr_mean
     st.markdown("<br>", unsafe_allow_html=True)
 
     # -------------------------------------------------------------------------
-    # RENDERIZAR PILAR 1 DETALHADO
+    # RENDERIZAR PILAR 1 DETALHADO (RECOVERY & READINESS)
     # -------------------------------------------------------------------------
     render_pillar_recovery(
         base_df=base_df, hrv_mean=hrv_mean, rhr_mean=rhr_mean,
@@ -217,14 +225,16 @@ def render_today_page(base_df: pd.DataFrame, hrv_mean: Optional[float], rhr_mean
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # PILAR 02 — TRAINING & PERFORMANCE
-    st.markdown("### 02 — Training & Performance")
-    st.caption("Training load · Aerobic fitness · Intensity distribution · Goals & Race Planning")
-    with st.expander("View activity analysis and training trends ↓", expanded=False):
-        from ui.races import render_races_page
-        render_races_page()
+    # -------------------------------------------------------------------------
+    # RENDERIZAR PILAR 2 DETALHADO (TRAINING & PERFORMANCE)
+    # -------------------------------------------------------------------------
+    render_pillar_training(base_df=base_df, mode=saved_mode)
 
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # -------------------------------------------------------------------------
     # PILAR 03 — STRENGTH, MOVEMENT & DURABILITY
+    # -------------------------------------------------------------------------
     st.markdown("### 03 — Strength, Movement & Durability")
     st.caption("Running dynamics · Cycling · Strength development · Equipment")
     with st.expander("View movement and strength analysis ↓", expanded=False):
@@ -247,4 +257,4 @@ def render_today_page(base_df: pd.DataFrame, hrv_mean: Optional[float], rhr_mean
 
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown("### 🤖 Coach Insight")
-    st.info("Sinais autónomos favoráveis. A VRC noturna e a FC de repouso estão em homeostase. Confirma apenas o nível de dor muscular (DOMS) no check-in antes de iniciar estímulos de alta intensidade.")
+    st.info("Sinais autónomos e carga acumulada em equilíbrio. O ACWR está estabilizado. Segue o planeamento para a sessão de hoje garantindo o reforço de hidratação pós-treino.")
