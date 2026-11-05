@@ -58,11 +58,17 @@ def fetch_daily_metrics(email: str, password: str, target_date: date, fetch_hist
     if prof:
         metrics["profile_extracted"] = prof
 
-    # 1. FC de repouso
+    # 1. FC de repouso (Tratamento robusto para número ou dicionário)
     try:
         hr_data = client.get_rhr_day(date_str)
         if isinstance(hr_data, dict):
-            metrics["rhr"] = hr_data.get("restingHeartRate")
+            rhr_val = hr_data.get("restingHeartRate")
+            if isinstance(rhr_val, dict):
+                rhr_val = rhr_val.get("value")
+            if rhr_val is not None:
+                metrics["rhr"] = float(rhr_val)
+        elif isinstance(hr_data, (int, float)):
+            metrics["rhr"] = float(hr_data)
     except Exception as exc:
         warnings.append(f"Não foi possível obter FC de repouso: {exc}")
 
@@ -77,19 +83,34 @@ def fetch_daily_metrics(email: str, password: str, target_date: date, fetch_hist
     except Exception as exc:
         warnings.append(f"Não foi possível obter VRC: {exc}")
 
-    # 3. Sono e Meta Dinâmica
+    # 3. Sono e Meta Dinâmica (Tratamento imune ao erro float(dict))
     try:
         sleep_data = client.get_sleep_data(date_str)
         if isinstance(sleep_data, dict):
             dto = sleep_data.get("dailySleepDTO", {})
-            metrics["sleep_score"] = dto.get("sleepScores", {}).get("overall", {}).get("value") or dto.get("sleepQualityScoreValue")
+            
+            # Score de sono
+            sleep_score_val = dto.get("sleepScores", {}).get("overall", {}).get("value") or dto.get("sleepQualityScoreValue")
+            if sleep_score_val is not None:
+                metrics["sleep_score"] = float(sleep_score_val)
+
+            # Horas de sono
             sec = dto.get("sleepTimeSeconds")
             if sec:
-                metrics["sleep_hours"] = round(sec / 3600.0, 2)
+                metrics["sleep_hours"] = round(float(sec) / 3600.0, 2)
             
-            sleep_need_min = dto.get("sleepNeed") or dto.get("sleepNeedMinutes")
-            if sleep_need_min is not None:
-                metrics["sleep_target_hours"] = round(float(sleep_need_min) / 60.0, 2)
+            # Meta de sono (Extrai float quer seja número ou dict)
+            sleep_need_raw = dto.get("sleepNeed") or dto.get("sleepNeedMinutes")
+            if isinstance(sleep_need_raw, dict):
+                sleep_need_val = sleep_need_raw.get("value") or sleep_need_raw.get("sleepNeedMinutes")
+            else:
+                sleep_need_val = sleep_need_raw
+
+            if sleep_need_val is not None:
+                try:
+                    metrics["sleep_target_hours"] = round(float(sleep_need_val) / 60.0, 2)
+                except (ValueError, TypeError):
+                    pass
     except Exception as exc:
         warnings.append(f"Não foi possível obter dados de sono: {exc}")
 
@@ -133,8 +154,14 @@ def fetch_daily_metrics(email: str, password: str, target_date: date, fetch_hist
                 
             try:
                 r_data = client.get_rhr_day(d_str)
-                if isinstance(r_data, dict) and r_data.get("restingHeartRate"):
-                    rec["rhr"] = float(r_data["restingHeartRate"])
+                if isinstance(r_data, dict):
+                    r_val = r_data.get("restingHeartRate")
+                    if isinstance(r_val, dict):
+                        r_val = r_val.get("value")
+                    if r_val is not None:
+                        rec["rhr"] = float(r_val)
+                elif isinstance(r_data, (int, float)):
+                    rec["rhr"] = float(r_data)
             except Exception:
                 pass
 
