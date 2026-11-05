@@ -8,7 +8,7 @@ import streamlit as st
 
 def generate_apex_insights(metrics_summary: Dict[str, Any], lang: str = "EN") -> str:
     """
-    Generates cross-pillar biological coaching using the official google-generativeai SDK.
+    Generates cross-pillar biological coaching using the stable gemini-pro model.
     """
     api_key = os.environ.get("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", None)
     
@@ -26,8 +26,8 @@ def generate_apex_insights(metrics_summary: Dict[str, Any], lang: str = "EN") ->
     try:
         genai.configure(api_key=api_key)
         
-        # Usar o modelo padrão estável do Google AI Studio
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        # Usar gemini-pro para garantir compatibilidade universal com a chave de API
+        model = genai.GenerativeModel("gemini-pro")
 
         system_instruction = (
             "You are APEX AI Engine, an elite sports scientist and endurance coach for high-performance athletes. "
