@@ -23,15 +23,16 @@ def generate_apex_insights(metrics_summary: Dict[str, Any], lang: str = "EN") ->
 
     user_question = metrics_summary.get("user_question")
     if user_question:
-        prompt = f"{system_instruction}\n{language_context}\n\nATHLETE QUESTION: \"{user_question}\""
+        prompt = f"{system_instruction}\n{language_context}\n\nATHLETE PHYSIOLOGICAL CONTEXT TODAY:\n- HRV: {metrics_summary.get('hrv')}ms\n- Sleep: {metrics_summary.get('sleep_hours')}h\n- Readiness: {metrics_summary.get('readiness')}/100\n\nATHLETE QUESTION:\n\"{user_question}\""
     else:
         prompt = f"{system_instruction}\n{language_context}\n\nDeliver a 3-sentence executive analysis of the athlete's recovery, load, and training recommendation."
 
-    models_to_try = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]
-    last_error = "Unknown error"
+    # Modelos atualizados e suportados na API moderna
+    models_to_try = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp"]
+    last_error = ""
     
     for model_name in models_to_try:
-        url = f"https://generativelanguage.googleapis.com/v1/models/{model_name}:generateContent?key={api_key}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
         headers = {"Content-Type": "application/json"}
         payload = {
             "contents": [{
@@ -45,9 +46,9 @@ def generate_apex_insights(metrics_summary: Dict[str, Any], lang: str = "EN") ->
                 data = res.json()
                 return data["candidates"][0]["content"]["parts"][0]["text"].strip()
             else:
-                last_error = f"Model {model_name} (HTTP {res.status_code}): {res.text}"
+                last_error = f"{model_name}: HTTP {res.status_code}"
         except Exception as e:
-            last_error = f"Exception with {model_name}: {str(e)}"
+            last_error = f"{model_name}: {str(e)}"
             continue
 
-    return f"APEX Intelligence Engine Error: {last_error}"
+    return f"APEX Intelligence Engine Error: All models failed. Last error -> {last_error}"
