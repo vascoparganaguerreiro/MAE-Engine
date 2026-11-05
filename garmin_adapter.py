@@ -46,19 +46,20 @@ def fetch_daily_metrics(email: str, password: str, target_date: date) -> Tuple[D
     except Exception as exc:
         warnings.append(f"Não foi possível obter dados de sono: {exc}")
 
-    # 4. Garmin Training Readiness (Prontidão Oficial)
+    # 4. Garmin Training Readiness (Extrai sempre o valor mais recente)
     try:
         readiness_data = client.get_training_readiness(date_str)
-        if isinstance(readiness_data, dict):
+        if isinstance(readiness_data, list) and len(readiness_data) > 0:
+            # Ordena ou vai buscar a última entrada registada no dia
+            last_entry = readiness_data[-1]
+            val = last_entry.get("score") or last_entry.get("scoreValue")
+            if val is not None:
+                metrics["vendor_readiness"] = float(val)
+        elif isinstance(readiness_data, dict):
             val = readiness_data.get("score") or readiness_data.get("scoreValue")
             if val is not None:
                 metrics["vendor_readiness"] = float(val)
-        elif isinstance(readiness_data, list) and readiness_data:
-            val = readiness_data[0].get("score") or readiness_data[0].get("scoreValue")
-            if val is not None:
-                metrics["vendor_readiness"] = float(val)
     except Exception:
-        # Fallback para endpoint diário genérico
         try:
             stats = client.get_stats(date_str)
             if isinstance(stats, dict) and "trainingReadinessScore" in stats:
