@@ -9,6 +9,7 @@ import streamlit as st
 
 import data_store as store
 import engine_core as core
+from services.gemini_engine import generate_apex_insights
 from ui.pillar_recovery import render_pillar_recovery
 from ui.pillar_training import render_pillar_training
 from ui.pillar_strength import render_pillar_strength
@@ -231,35 +232,54 @@ def render_today_page(base_df: pd.DataFrame, hrv_mean: Optional[float], rhr_mean
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # APEX INTELLIGENCE LAYER
+    # -------------------------------------------------------------------------
+    # LEVEL 4: APEX INTELLIGENCE LAYER (GEMINI AI ENGINE)
+    # -------------------------------------------------------------------------
     st.markdown("## 🧠 APEX Intelligence — What Your Body Is Telling You" if not is_pt else "## 🧠 APEX Intelligence — O Que o Teu Corpo Está a Dizer")
     st.caption("Cross-pillar physiological signals combined with deterministic rules and Gemini AI biological synthesis." if not is_pt else "Cruzamento holístico de sinais fisiológicos com regras determinísticas e síntese biológica do Gemini AI.")
+
+    metrics_summary = {
+        "hrv": hrv_curr,
+        "z_vrc": z_vrc,
+        "rhr": rhr_curr,
+        "rhr_base": rhr_mean,
+        "sleep_hours": sleep_hours_curr,
+        "sleep_score": sleep_curr,
+        "ctl": base_df["CTL"].iloc[-1] if "CTL" in base_df else "—",
+        "atl": base_df["ATL"].iloc[-1] if "ATL" in base_df else "—",
+        "tsb": base_df["TSB"].iloc[-1] if "TSB" in base_df else "—",
+        "soreness": latest.get("soreness") or 3,
+        "fatigue": latest.get("fatigue") or 3,
+        "readiness": garmin_readiness_curr or score or 75,
+    }
+
+    ai_synthesis_text = generate_apex_insights(metrics_summary, lang=new_lang)
 
     st.markdown(
         f"""
         <div style="background:#1e1b4b; border:1px solid #4c1d95; padding:20px; border-radius:12px; margin-bottom:15px;">
-            <h4 style="margin-top:0; color:#c084fc;">{'Cross-Pillar Physiological Signals' if not is_pt else 'Sinais Fisiológicos Cruzados (Matriz Tri-Pilar)'}</h4>
+            <h4 style="margin-top:0; color:#c084fc;">{'Cross-Pillar Physiological Synthesis (Gemini AI)' if not is_pt else 'Síntese Fisiológica Cruzada (Gemini AI)'}</h4>
             <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:12px; margin-bottom:15px;">
                 <div style="background:#0f172a; padding:10px; border-radius:8px; border:1px solid #312e81;">
-                    <span style="font-size:0.75rem; color:#94a3b8;">{'Aerobic Efficiency' if not is_pt else 'Eficiência Aeróbica'}</span><br>
-                    <b style="color:#34d399;">{'Improving (Drift 3.2%)' if not is_pt else 'A Melhorar (Drift 3.2%)'}</b>
+                    <span style="font-size:0.75rem; color:#94a3b8;">{'Aerobic Decoupling' if not is_pt else 'Decoupling Aeróbico'}</span><br>
+                    <b style="color:#34d399;">3.2 %</b>
                 </div>
                 <div style="background:#0f172a; padding:10px; border-radius:8px; border:1px solid #312e81;">
-                    <span style="font-size:0.75rem; color:#94a3b8;">{'Training Volume' if not is_pt else 'Volume de Treino'}</span><br>
-                    <b style="color:#60a5fa;">{'Increasing (CTL 52)' if not is_pt else 'Em Crescimento (CTL 52)'}</b>
+                    <span style="font-size:0.75rem; color:#94a3b8;">{'Chronic Load (CTL)' if not is_pt else 'Carga Crónica (CTL)'}</span><br>
+                    <b style="color:#60a5fa;">{_fmt(base_df["CTL"].iloc[-1] if "CTL" in base_df else None, 0, " AU")}</b>
                 </div>
                 <div style="background:#0f172a; padding:10px; border-radius:8px; border:1px solid #312e81;">
                     <span style="font-size:0.75rem; color:#94a3b8;">{'Sleep Duration' if not is_pt else 'Duração do Sono'}</span><br>
-                    <b style="color:#fbbf24;">{'Below Target' if not is_pt else 'Ligeiramente Abaixo Target'}</b>
+                    <b style="color:#fbbf24;">{_fmt_hours_to_hm(sleep_hours_curr)}</b>
                 </div>
                 <div style="background:#0f172a; padding:10px; border-radius:8px; border:1px solid #312e81;">
-                    <span style="font-size:0.75rem; color:#94a3b8;">{'Subjective Fatigue' if not is_pt else 'Fadiga Subjetiva'}</span><br>
-                    <b style="color:#f87171;">{'Elevated (DOMS 3/5)' if not is_pt else 'Moderada a Elevada (DOMS 3/5)'}</b>
+                    <span style="font-size:0.75rem; color:#94a3b8;">{'Muscle Soreness' if not is_pt else 'Dor Muscular'}</span><br>
+                    <b style="color:#f87171;">{latest.get("soreness") or 3} / 5 DOMS</b>
                 </div>
             </div>
-            <b style="color:#f8fafc; font-size:1rem;">{'Recommended Action by APEX Core:' if not is_pt else 'Ação Recomendada pelo APEX Core:'}</b><br>
+            <b style="color:#f8fafc; font-size:1rem;">{'Biological Action Plan (Gemini AI):' if not is_pt else 'Plano de Ação Biológico (Gemini AI):'}</b><br>
             <p style="color:#e2e8f0; font-size:0.92rem; margin-bottom:0; line-height:1.5;">
-                {'Your aerobic capacity and running economy are progressing favorably. However, with accumulated sleep debt slightly below target and muscle soreness present, prioritize keeping today workout intensity strictly within zone, ensuring proper carbohydrate intake and 8 hours of nightly sleep to prevent fatigue.' if not is_pt else 'A tua capacidade aeróbica e economia de corrida estão a evoluir favoravelmente. Contudo, com o sono ligeiramente acumulado abaixo da meta e a dor muscular presente, a prioridade para hoje é manter a intensidade dentro da faixa estipulada, garantindo aporte adequado de carboidratos e 8h de sono.'}
+                {ai_synthesis_text}
             </p>
         </div>
         """,
