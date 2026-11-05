@@ -120,7 +120,7 @@ def _run_garmin_sync(email_override: Optional[str] = None, password_override: Op
     if not email or not password:
         st.session_state["garmin_sync_result"] = {
             "ok": False,
-            "message": "Insere as credenciais da Garmin ou introduz-as no expansor de Sincronização.",
+            "message": "Insere as credenciais da Garmin ou configura-as nos Secrets do Streamlit.",
             "warnings": [],
         }
         return False
@@ -150,9 +150,6 @@ def _run_garmin_sync(email_override: Optional[str] = None, password_override: Op
             "warnings": [],
         }
         return False
-    finally:
-        st.session_state["garmin_email_input"] = ""
-        st.session_state["garmin_password_input"] = ""
 
 
 def _parse_garmin_file_content(file_name: str, content: bytes) -> List[Dict[str, Any]]:
