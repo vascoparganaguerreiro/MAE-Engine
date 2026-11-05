@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import os
 from typing import Dict, Any
-import google.generativeai as genai
+from google import genai
 import streamlit as st
 
 
 def generate_apex_insights(metrics_summary: Dict[str, Any], lang: str = "EN") -> str:
     """
-    Generates cross-pillar biological coaching using Gemini.
-    Enforces deterministic safety: Gemini interprets data, never invents metrics.
+    Generates cross-pillar biological coaching using the official Google GenAI SDK (gemini-2.5-flash / gemini-1.5-flash).
     """
     api_key = os.environ.get("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", None)
     
@@ -25,11 +24,7 @@ def generate_apex_insights(metrics_summary: Dict[str, Any], lang: str = "EN") ->
         )
 
     try:
-        genai.configure(api_key=api_key)
-        
-        # Nome do modelo com alias completo compatível com v1beta
-        model_name = "models/gemini-1.5-flash"
-        model = genai.GenerativeModel(model_name)
+        client = genai.Client(api_key=api_key)
 
         system_instruction = (
             "You are APEX AI Engine, an elite sports scientist and endurance coach for high-performance athletes. "
@@ -40,7 +35,6 @@ def generate_apex_insights(metrics_summary: Dict[str, Any], lang: str = "EN") ->
 
         language_context = "Respond strictly in Portuguese (Portugal)." if lang == "PT" else "Respond strictly in English."
 
-        # Trata perguntas diretas do chat ou gera o resumo diário
         user_question = metrics_summary.get("user_question")
         if user_question:
             prompt = f"""
@@ -79,19 +73,20 @@ def generate_apex_insights(metrics_summary: Dict[str, Any], lang: str = "EN") ->
             3. Clear recommendation for today's training execution.
             """
 
-        response = model.generate_content(prompt)
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+        )
         return response.text.strip()
 
     except Exception as e:
-        # Fallback de segurança para 'gemini-1.5-flash-latest' ou 'gemini-pro' se o alias falhar
+        # Fallback para gemini-1.5-flash se a chave ainda estiver alocada a v1
         try:
-            model = genai.GenerativeModel("gemini-1.5-flash-latest")
-            response = model.generate_content(prompt)
+            client = genai.Client(api_key=api_key)
+            response = client.models.generate_content(
+                model="gemini-1.5-flash",
+                contents=prompt,
+            )
             return response.text.strip()
-        except Exception:
-            try:
-                model = genai.GenerativeModel("gemini-pro")
-                response = model.generate_content(prompt)
-                return response.text.strip()
-            except Exception as e2:
-                return f"APEX Intelligence Engine Error: {str(e2)}"
+        except Exception as e2:
+            return f"APEX Intelligence Engine Error: {str(e2)}"
