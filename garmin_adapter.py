@@ -34,7 +34,7 @@ def fetch_daily_metrics(email: str, password: str, target_date: date) -> Tuple[D
     except Exception as exc:
         warnings.append(f"Não foi possível obter VRC: {exc}")
 
-    # 3. Sono
+    # 3. Sono & Meta Recomendada Garmin (sleepNeed)
     try:
         sleep_data = client.get_sleep_data(date_str)
         if isinstance(sleep_data, dict):
@@ -43,6 +43,11 @@ def fetch_daily_metrics(email: str, password: str, target_date: date) -> Tuple[D
             sec = dto.get("sleepTimeSeconds")
             if sec:
                 metrics["sleep_hours"] = round(sec / 3600.0, 2)
+            
+            # Tenta extrair a recomendação dinâmica de sono da Garmin (sleepNeed em minutos)
+            sleep_need_min = dto.get("sleepNeed") or dto.get("sleepNeedMinutes")
+            if sleep_need_min is not None:
+                metrics["sleep_target_hours"] = round(float(sleep_need_min) / 60.0, 2)
     except Exception as exc:
         warnings.append(f"Não foi possível obter dados de sono: {exc}")
 
@@ -82,7 +87,6 @@ def fetch_historical_metrics(email: str, password: str, days: int = 30) -> List[
         d_str = target_d.isoformat()
         rec: Dict[str, Any] = {"date": d_str}
         
-        # Tenta VRC
         try:
             hrv_data = client.get_hrv_data(d_str)
             if isinstance(hrv_data, dict):
@@ -93,7 +97,6 @@ def fetch_historical_metrics(email: str, password: str, days: int = 30) -> List[
         except Exception:
             pass
             
-        # Tenta RHR
         try:
             hr_data = client.get_rhr_day(d_str)
             if isinstance(hr_data, dict) and hr_data.get("restingHeartRate"):
@@ -104,6 +107,6 @@ def fetch_historical_metrics(email: str, password: str, days: int = 30) -> List[
         if len(rec) > 1:
             records.append(rec)
             
-        time.sleep(0.1)  # Previne rate-limiting
+        time.sleep(0.1)
 
     return records
