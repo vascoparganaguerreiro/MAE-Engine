@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from typing import Dict, Any
-import requests
+from google import genai
 import streamlit as st
 
 
@@ -27,36 +27,26 @@ def generate_apex_insights(metrics_summary: Dict[str, Any], lang: str = "EN") ->
     else:
         prompt = f"{system_instruction}\n{language_context}\n\nDeliver a 3-sentence executive analysis of the athlete's recovery, load, and training recommendation."
 
-    # Lista alargada com os códigos de modelo detetados na documentação do AI Studio
-    models_to_try = [
-        "gemini-3.8-flash",
-        "gemini-4-argon",
-        "gemini-2.5-flash",
-        "gemini-1.5-flash",
-        "gemini-1.5-pro",
-        "gemini-pro"
-    ]
-    
-    last_error = ""
-    
-    for model_name in models_to_try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
-        headers = {"Content-Type": "application/json"}
-        payload = {
-            "contents": [{
-                "parts": [{"text": prompt}]
-            }]
-        }
+    try:
+        client = genai.Client(api_key=api_key)
+        
+        # Testar os modelos mais recentes com o SDK oficial da Google
+        models_to_try = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-3.8-flash"]
+        last_error = ""
 
-        try:
-            res = requests.post(url, json=payload, headers=headers, timeout=10)
-            if res.status_code == 200:
-                data = res.json()
-                return data["candidates"][0]["content"]["parts"][0]["text"].strip()
-            else:
-                last_error = f"{model_name}: HTTP {res.status_code}"
-        except Exception as e:
-            last_error = f"{model_name}: {str(e)}"
-            continue
+        for model_name in models_to_try:
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                )
+                if response and response.text:
+                    return response.text.strip()
+            except Exception as sub_e:
+                last_error = str(sub_e)
+                continue
 
-    return f"APEX Intelligence Engine Error: Todos os modelos falharam. Último erro -> {last_error}"
+        return f"APEX Intelligence Engine Error: Todos os modelos SDK falharam. Último erro -> {last_error}"
+
+    except Exception as e:
+        return f"APEX Intelligence Engine Error: {str(e)}"
