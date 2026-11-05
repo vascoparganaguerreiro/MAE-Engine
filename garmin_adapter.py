@@ -7,8 +7,50 @@ from typing import Any, Dict, List, Tuple
 from garminconnect import Garmin
 
 
+def fetch_user_profile_data(client: Garmin) -> Dict[str, Any]:
+    """Extrai métricas de perfil (idade, peso, sexo, vo2max, fc_max) da Garmin Connect."""
+    profile_data: Dict[str, Any] = {}
+    try:
+        user_prof = client.get_user_profile()
+        if isinstance(user_prof, dict):
+            # Sexo
+            gender_raw = str(user_prof.get("gender") or "").upper()
+            if "MALE" in gender_raw and "FEMALE" not in gender_raw:
+                profile_data["gender"] = "Masculino"
+            elif "FEMALE" in gender_raw:
+                profile_data["gender"] = "Feminino"
+
+            # Idade / Data de Nascimento
+            dob = user_prof.get("birthDate")
+            if dob:
+                try:
+                    birth_year = datetime.strptime(str(dob)[:10], "%Y-%m-%d").year
+                    profile_data["age"] = float(date.today().year - birth_year)
+                except Exception:
+                    pass
+
+            # Peso (Garmin devolve em gramas ou kg)
+            weight_g = user_prof.get("weight")
+            if weight_g:
+                w_val = float(weight_g)
+                profile_data["weight_kg"] = round(w_val / 1000.0, 1) if w_val > 300 else round(w_val, 1)
+
+            # VO2max e FC Máxima
+            vo2 = user_prof.get("vo2MaxRunning") or user_prof.get("vo2MaxValue")
+            if vo2:
+                profile_data["vo2max"] = round(float(vo2), 1)
+
+            hr_max = user_prof.get("runningMaxHeartRate") or user_prof.get("maxHeartRate")
+            if hr_max:
+                profile_data["hr_max"] = float(hr_max)
+    except Exception:
+        pass
+
+    return profile_data
+
+
 def fetch_daily_metrics(email: str, password: str, target_date: date) -> Tuple[Dict[str, Any], List[str]]:
-    """Busca métricas diárias diretamente da API da Garmin Connect."""
+    """Busca métricas diárias e dados de perfil diretamente da API da Garmin Connect."""
     warnings: List[str] = []
     metrics: Dict[str, Any] = {}
 
@@ -16,6 +58,11 @@ def fetch_daily_metrics(email: str, password: str, target_date: date) -> Tuple[D
     client.login()
 
     date_str = target_date.isoformat()
+
+    # Tenta extrair perfil do utilizador
+    prof = fetch_user_profile_data(client)
+    if prof:
+        metrics["profile_extracted"] = prof
 
     # 1. Frequência Cardíaca de Repouso
     try:
@@ -34,7 +81,7 @@ def fetch_daily_metrics(email: str, password: str, target_date: date) -> Tuple[D
     except Exception as exc:
         warnings.append(f"Não foi possível obter VRC: {exc}")
 
-    # 3. Sono & Meta Recomendada Garmin (sleepNeed)
+    # 3. Sono & Meta Recomendada Garmin
     try:
         sleep_data = client.get_sleep_data(date_str)
         if isinstance(sleep_data, dict):
@@ -44,7 +91,6 @@ def fetch_daily_metrics(email: str, password: str, target_date: date) -> Tuple[D
             if sec:
                 metrics["sleep_hours"] = round(sec / 3600.0, 2)
             
-            # Tenta extrair a recomendação dinâmica de sono da Garmin (sleepNeed em minutos)
             sleep_need_min = dto.get("sleepNeed") or dto.get("sleepNeedMinutes")
             if sleep_need_min is not None:
                 metrics["sleep_target_hours"] = round(float(sleep_need_min) / 60.0, 2)
