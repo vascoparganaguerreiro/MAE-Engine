@@ -16,7 +16,7 @@ import streamlit as st
 
 import data_store as store
 import engine_core as core
-from garmin_adapter import fetch_daily_metrics as fetch_garmin_metrics
+from garmin_adapter import fetch_daily_metrics as fetch_garmin_metrics, fetch_historical_metrics
 
 
 # -----------------------------------------------------------------------------
@@ -40,31 +40,6 @@ st.markdown(
       .apex-warn { border-left:5px solid #f59e0b; }
       .apex-alert { border-left:5px solid #ef4444; }
       .muted { color:#94a3b8; font-size:.88rem; }
-      
-      /* Botão Premium Sync Data */
-      div.stButton > button.apex-sync-btn {
-          background: linear-gradient(135deg, #0ea5e9 0%, #2563eb 100%);
-          color: #ffffff;
-          font-weight: 700;
-          font-size: 0.95rem;
-          letter-spacing: 0.5px;
-          border: none;
-          border-radius: 10px;
-          padding: 10px 24px;
-          box-shadow: 0 4px 14px 0 rgba(14, 165, 233, 0.35);
-          transition: all 0.3s ease;
-          width: 100%;
-          cursor: pointer;
-      }
-      div.stButton > button.apex-sync-btn:hover {
-          background: linear-gradient(135deg, #38bdf8 0%, #1d4ed8 100%);
-          box-shadow: 0 6px 20px 0 rgba(14, 165, 233, 0.55);
-          transform: translateY(-1px);
-      }
-      div.stButton > button.apex-sync-btn:active {
-          transform: translateY(1px);
-          box-shadow: 0 2px 8px 0 rgba(14, 165, 233, 0.3);
-      }
     </style>
     """,
     unsafe_allow_html=True,
@@ -112,10 +87,10 @@ def _clean_number(value: Any) -> Optional[float]:
         return None
 
 
-def _run_garmin_sync(email_override: Optional[str] = None, password_override: Optional[str] = None) -> bool:
+def _run_garmin_sync() -> bool:
     """Executa a sincronização direta com os servidores Garmin Connect."""
-    email = email_override or _secret("GARMIN_EMAIL") or str(st.session_state.get("garmin_email_input", "")).strip()
-    password = password_override or _secret("GARMIN_PASSWORD") or str(st.session_state.get("garmin_password_input", ""))
+    email = _secret("GARMIN_EMAIL") or str(st.session_state.get("garmin_email_input", "")).strip()
+    password = _secret("GARMIN_PASSWORD") or str(st.session_state.get("garmin_password_input", ""))
     
     if not email or not password:
         st.session_state["garmin_sync_result"] = {
@@ -153,24 +128,24 @@ def _run_garmin_sync(email_override: Optional[str] = None, password_override: Op
 
 
 def _parse_garmin_file_content(file_name: str, content: bytes) -> List[Dict[str, Any]]:
-    """Parser universal para relatórios exportados do Garmin Connect (CSV e JSON GDPR)."""
+    """Parser abrangente para relatórios exportados do Garmin Connect (CSV e JSON GDPR)."""
     records: List[Dict[str, Any]] = []
     fname_lower = file_name.lower()
 
     if fname_lower.endswith(".csv"):
         try:
             df = pd.read_csv(io.BytesIO(content))
-            df.columns = [str(c).strip().lower() for c in df.columns]
+            df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
 
-            date_col = next((c for c in df.columns if "data" in c or "date" in c or "day" in c), None)
+            date_col = next((c for c in df.columns if any(k in c for k in ["data", "date", "day", "calendar"])), None)
             if not date_col:
                 return records
 
-            hrv_col = next((c for c in df.columns if "hrv" in c or "vrc" in c), None)
-            rhr_col = next((c for c in df.columns if "rhr" in c or "repouso" in c or "resting" in c), None)
-            sleep_score_col = next((c for c in df.columns if "sleep score" in c or "pontuação do sono" in c), None)
-            sleep_hours_col = next((c for c in df.columns if "sleep time" in c or "horas de sono" in c or "duration" in c), None)
-            readiness_col = next((c for c in df.columns if "readiness" in c or "prontidão" in c), None)
+            hrv_col = next((c for c in df.columns if any(k in c for k in ["hrv", "vrc", "sdnn", "lastnightavg", "weeklyavg"])), None)
+            rhr_col = next((c for c in df.columns if any(k in c for k in ["rhr", "repouso", "resting", "restingheartrate"])), None)
+            sleep_score_col = next((c for c in df.columns if "sleep" in c and "score" in c or "pontuação" in c), None)
+            sleep_hours_col = next((c for c in df.columns if any(k in c for k in ["sleep_time", "horas_de_sono", "duration", "total_sleep"])), None)
+            readiness_col = next((c for c in df.columns if any(k in c for k in ["readiness", "prontidão", "training_readiness"])), None)
 
             for _, row in df.iterrows():
                 try:
@@ -227,7 +202,12 @@ def _parse_garmin_file_content(file_name: str, content: bytes) -> List[Dict[str,
                     if rhr_val is not None:
                         rec["rhr"] = _clean_number(rhr_val)
 
-                    hrv_val = item.get("lastNightAvg") or item.get("hrvSummary", {}).get("lastNightAvg")
+                    hrv_val = (
+                        item.get("lastNightAvg")
+                        or item.get("hrvSummary", {}).get("lastNightAvg")
+                        or item.get("weeklyAvg")
+                        or item.get("lastNight5MinHigh")
+                    )
                     if hrv_val is not None:
                         rec["hrv"] = _clean_number(hrv_val)
 
@@ -589,34 +569,61 @@ if top_nav == "📌 Today / Decisão Diária":
 # -----------------------------------------------------------------------------
 elif top_nav == "📈 Tendência de VRC & Gráficos":
     st.subheader("📈 Tendência da variabilidade da frequência cardíaca")
-    chart_df = df_display.dropna(subset=["HRV"]).copy()
+    
+    # Exibe botão para puxar histórico completo da Garmin se houver pouca VRC
+    if hrv_valid_days < 7:
+        if st.button("📥 Descarregar Histórico de VRC de 60 Dias da Garmin Connect", use_container_width=True):
+            email = _secret("GARMIN_EMAIL")
+            password = _secret("GARMIN_PASSWORD")
+            if email and password:
+                with st.spinner("A transferir histórico de VRC e FC de repouso dos últimos 60 dias..."):
+                    recs = fetch_historical_metrics(email, password, days=60)
+                    if recs:
+                        store.bulk_insert_garmin_history(recs)
+                        st.success(f"{len(recs)} dias de histórico importados com sucesso!")
+                        st.rerun()
+                    else:
+                        st.error("Não foi possível recuperar o histórico de VRC.")
+            else:
+                st.error("Configura as credenciais nos Secrets do Streamlit para descarregar o histórico.")
+
+    chart_df = df_display.copy()
     overlay_rhr = st.checkbox("Sobrepor FC de repouso", value=True)
-    if chart_df.empty:
-        st.info("Ainda não existem registos de VRC no período selecionado. Importa o histórico ou sincroniza a Garmin.")
+    
+    if chart_df["HRV"].dropna().empty and chart_df["RHR"].dropna().empty:
+        st.info("Ainda não existem registos no período selecionado. Importa o histórico ou clica no botão de descarregar histórico acima.")
     else:
-        chart_df["HRV_EWMA"] = chart_df["HRV"].ewm(span=7, adjust=False, min_periods=3).mean()
+        chart_df["HRV_EWMA"] = chart_df["HRV"].ewm(span=7, adjust=False, min_periods=2).mean()
         fig = go.Figure()
+        
         if base_hrv:
             fig.add_hrect(y0=base_hrv.mean - base_hrv.sd, y1=base_hrv.mean + base_hrv.sd,
                           fillcolor="rgba(16,185,129,0.12)", line_width=0,
                           annotation_text="±1 DP da base pessoal", annotation_position="top left")
             fig.add_hline(y=base_hrv.mean, line_dash="dot", line_color="#10B981", name="Média pessoal")
-        fig.add_trace(go.Scatter(x=chart_df["Date"], y=chart_df["HRV"], mode="lines+markers",
-                                 name="VRC diária (ms)", line=dict(color="#3B82F6", width=2)))
-        fig.add_trace(go.Scatter(x=chart_df["Date"], y=chart_df["HRV_EWMA"], mode="lines",
-                                 name="Média móvel exponencial 7d", line=dict(color="#10B981", width=3, dash="dash")))
+            
+        # Linha de VRC (liga os pontos válidos)
+        vrc_data = chart_df.dropna(subset=["HRV"])
+        if not vrc_data.empty:
+            fig.add_trace(go.Scatter(x=vrc_data["Date"], y=vrc_data["HRV"], mode="lines+markers",
+                                     name="VRC diária (ms)", line=dict(color="#3B82F6", width=2)))
+            fig.add_trace(go.Scatter(x=chart_df["Date"], y=chart_df["HRV_EWMA"], mode="lines",
+                                     name="Média móvel exponencial 7d", line=dict(color="#10B981", width=3, dash="dash")))
+        
         if overlay_rhr:
-            rhr_df = df_display.dropna(subset=["RHR"])
-            fig.add_trace(go.Scatter(x=rhr_df["Date"], y=rhr_df["RHR"], mode="lines+markers",
-                                     name="FC repouso (bpm)", yaxis="y2", line=dict(color="#EF4444", width=1.5)))
-            fig.update_layout(yaxis2=dict(title="FC repouso (bpm)", overlaying="y", side="right"))
+            rhr_df = chart_df.dropna(subset=["RHR"])
+            if not rhr_df.empty:
+                fig.add_trace(go.Scatter(x=rhr_df["Date"], y=rhr_df["RHR"], mode="lines+markers",
+                                         name="FC repouso (bpm)", yaxis="y2", line=dict(color="#EF4444", width=1.5)))
+                fig.update_layout(yaxis2=dict(title="FC repouso (bpm)", overlaying="y", side="right"))
+                
         fig.update_layout(template="plotly_dark", hovermode="x unified", yaxis_title="VRC (ms)",
                           title=f"Últimos {window} dias com dados reais")
         st.plotly_chart(fig, use_container_width=True)
 
     st.subheader("Tendência estatística")
     if trend_info["n"] < 7:
-        st.info(f"{trend_info['text']} — {trend_info['n']} observações válidas; são necessárias pelo menos 7.")
+        st.info(f"{trend_info['text']} — {trend_info['n']} observações válidas de VRC; clica no botão de importar histórico acima para preencher os dias em falta.")
     else:
         st.write(f"{trend_info['text']}. Inclinação estimada: **{trend_info['slope']:.2f} ms/dia**; IC aproximado 95%: {trend_info['ci_low']:.2f} a {trend_info['ci_high']:.2f}; n={trend_info['n']}.")
         st.caption("Uma tendência estatística não identifica a causa e não determina, isoladamente, a prontidão para treinar.")
