@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import zipfile
 from datetime import date, datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import numpy as np
 import pandas as pd
@@ -14,24 +13,22 @@ from integrations.garmin import fetch_daily_metrics as fetch_garmin_metrics
 from ui.today import render_today_page
 
 
-# Setup global sem sidebar
+# Configuração Global Streamlit — Single Page Layout
 st.set_page_config(
-    page_title="Apex | Personal Performance Engine",
+    page_title="Apex Engine | Personal Performance & Longevity",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 store.init_db()
 
+# Estilos CSS Globais — Paleta Semântica Restrita
 st.markdown(
     """
     <style>
       .stApp { background: #0b0f17; color: #e2e8f0; }
-      [data-testid="stMetric"] { background:#131a27; border:1px solid #263244; padding:12px; border-radius:12px; }
-      .apex-note { background:#131a27; border:1px solid #334155; border-radius:12px; padding:14px 16px; margin-bottom:15px; }
-      .apex-good { border-left:5px solid #10b981; }
-      .apex-warn { border-left:5px solid #f59e0b; }
-      .apex-alert { border-left:5px solid #ef4444; }
+      [data-testid="stHeader"] { background: rgba(11, 15, 23, 0.8); }
+      [data-testid="stSidebar"] { display: none; }
       .muted { color:#94a3b8; font-size:.88rem; }
     </style>
     """,
@@ -85,11 +82,11 @@ def _run_garmin_sync() -> bool:
             return True
         else:
             return False
-    except Exception as exc:
+    except Exception:
         return False
 
 
-# Pipeline de Dados
+# Pipeline de Dados APEX
 today = date.today()
 start_day = today - timedelta(days=60)
 dates = pd.date_range(start=start_day, end=today, freq="D")
@@ -139,7 +136,7 @@ hrv_context = core.get_hrv_context(hrv_curr, hrv_mean, base_hrv.sd if base_hrv e
 effective_target = sleep_target_curr if sleep_target_curr is not None else 8.0
 diff_minutes = (effective_target - sleep_hours_curr) * 60.0 if sleep_hours_curr is not None else None
 
-# Renderiza a página única principal
+# Renderizar Dashboard Único do APEX Engine
 render_today_page(
     base_df=base_df, hrv_mean=hrv_mean, rhr_mean=rhr_mean,
     hrv_curr=hrv_curr, rhr_curr=rhr_curr, sleep_curr=sleep_curr,
