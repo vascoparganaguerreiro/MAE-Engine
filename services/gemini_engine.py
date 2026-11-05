@@ -30,8 +30,8 @@ def generate_apex_insights(metrics_summary: Dict[str, Any], lang: str = "EN") ->
     try:
         client = genai.Client(api_key=api_key)
         
-        # Testar os modelos mais recentes com o SDK oficial da Google
-        models_to_try = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-3.8-flash"]
+        # Usar os novos códigos de modelo visíveis na tua consola do AI Studio
+        models_to_try = ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite"]
         last_error = ""
 
         for model_name in models_to_try:
@@ -46,7 +46,7 @@ def generate_apex_insights(metrics_summary: Dict[str, Any], lang: str = "EN") ->
                 last_error = str(sub_e)
                 continue
 
-        return f"APEX Intelligence Engine Error: Todos os modelos SDK falharam. Último erro -> {last_error}"
+        return f"APEX Intelligence Engine Error: Todos os modelos falharam. Último erro -> {last_error}"
 
     except Exception as e:
         return f"APEX Intelligence Engine Error: {str(e)}"
