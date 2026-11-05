@@ -8,7 +8,7 @@ import streamlit as st
 
 def generate_apex_insights(metrics_summary: Dict[str, Any], lang: str = "EN") -> str:
     """
-    Generates cross-pillar biological coaching using the official Google GenAI SDK (gemini-2.5-flash / gemini-1.5-flash).
+    Generates cross-pillar biological coaching using the official Google GenAI SDK.
     """
     api_key = os.environ.get("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", None)
     
@@ -80,7 +80,6 @@ def generate_apex_insights(metrics_summary: Dict[str, Any], lang: str = "EN") ->
         return response.text.strip()
 
     except Exception as e:
-        # Fallback para gemini-1.5-flash se a chave ainda estiver alocada a v1
         try:
             client = genai.Client(api_key=api_key)
             response = client.models.generate_content(
