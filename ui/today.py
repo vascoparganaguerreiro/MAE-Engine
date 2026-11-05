@@ -11,6 +11,8 @@ import data_store as store
 import engine_core as core
 from ui.pillar_recovery import render_pillar_recovery
 from ui.pillar_training import render_pillar_training
+from ui.pillar_strength import render_pillar_strength
+from ui.pillar_nutrition import render_nutrition_habits_layer
 
 
 def _fmt(value: Any, digits: int = 1, suffix: str = "") -> str:
@@ -28,13 +30,6 @@ def _fmt_hours_to_hm(hours_val: Optional[float]) -> str:
     return f"{h}h {m}m" if h > 0 and m > 0 else f"{h}h" if h > 0 else f"{m}m"
 
 
-def _fmt_minutes_diff(diff_min: Optional[float]) -> str:
-    if diff_min is None or pd.isna(diff_min):
-        return "—"
-    diff_val = int(round(float(diff_min)))
-    return f"{diff_val} min" if diff_val > 0 else f"+{abs(diff_val)} min" if diff_val < 0 else "0 min"
-
-
 def render_today_page(base_df: pd.DataFrame, hrv_mean: Optional[float], rhr_mean: Optional[float],
                       hrv_curr: Optional[float], rhr_curr: Optional[float], sleep_curr: Optional[float],
                       sleep_hours_curr: Optional[float], sleep_target_curr: Optional[float],
@@ -44,9 +39,7 @@ def render_today_page(base_df: pd.DataFrame, hrv_mean: Optional[float], rhr_mean
 
     latest = base_df.iloc[-1]
     
-    # -------------------------------------------------------------------------
-    # 1. HEADER & STATUS SUPERIOR (Sem Sidebar)
-    # -------------------------------------------------------------------------
+    # Header & Status Superior
     head_col1, head_col2 = st.columns([3, 1])
     with head_col1:
         st.markdown("<h1 style='margin-bottom:0;'>⚡ APEX</h1>", unsafe_allow_html=True)
@@ -74,7 +67,7 @@ def render_today_page(base_df: pd.DataFrame, hrv_mean: Optional[float], rhr_mean
             ["🏃 Performance (Atleta)", "🧘‍♂️ Health & Wellness", "🧬 Longevidade & Saúde Metabólica"],
             index=0 if saved_mode == "performance" else 1 if saved_mode == "wellness" else 2
         )
-        new_mode = "performance" if mode_opt.startswith("🏃") else "wellness" if mode_opt.startswith("🧬") else "longevity"
+        new_mode = "performance" if mode_opt.startswith("🏃") else "wellness" if mode_opt.startswith("🧘") else "longevity"
         if new_mode != saved_mode:
             store.set_setting("mode", new_mode)
             st.rerun()
@@ -101,11 +94,8 @@ def render_today_page(base_df: pd.DataFrame, hrv_mean: Optional[float], rhr_mean
                     sync_callback()
                     st.rerun()
 
-    # -------------------------------------------------------------------------
-    # 2. TODAY'S OVERVIEW & RECOMMENDATION
-    # -------------------------------------------------------------------------
+    # Today's Overview & Recommendation
     st.subheader("Today's Overview & Recommendation")
-    
     if garmin_readiness_curr is not None:
         g_score = int(garmin_readiness_curr)
         g_decision = core.decision_for(g_score)
@@ -114,71 +104,40 @@ def render_today_page(base_df: pd.DataFrame, hrv_mean: Optional[float], rhr_mean
             f'<div class="apex-note {tone_class}">'
             f'<span style="font-size:1.4rem; font-weight:800; color:#f8fafc;">Garmin Training Readiness: {g_score}/100</span><br>'
             f'<b>{escape(g_decision["headline"])}</b><br>'
-            f'<span class="muted">Recuperação autónoma estável. Verifica as sensações subjetivas antes da sessão.</span>'
+            f'<span class="muted">Recuperação autónoma estável. Confirma as sensações subjetivas no Pilar 1 antes da sessão.</span>'
             f'</div>',
             unsafe_allow_html=True
         )
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # -------------------------------------------------------------------------
-    # 3. YOUR FIVE KEY METRICS
-    # -------------------------------------------------------------------------
+    # 5 Key Metrics
     st.subheader("Your Five Key Metrics")
-
     garmin_weekly_avg = latest.get("hrv_weekly_avg") if pd.notna(latest.get("hrv_weekly_avg")) else None
     effective_vrc_base = garmin_weekly_avg if garmin_weekly_avg is not None else hrv_mean
     hrv_sd = base_df["HRV"].tail(30).std() if len(base_df["HRV"].dropna()) >= 7 else 5.0
     if pd.isna(hrv_sd) or hrv_sd == 0:
         hrv_sd = 5.0
 
-    if hrv_curr is not None and effective_vrc_base is not None:
-        z_vrc = (hrv_curr - effective_vrc_base) / hrv_sd
-        base_label_type = "Média 7d Garmin" if garmin_weekly_avg is not None else "Base pessoal"
-        hrv_badge_txt = f"{base_label_type}: {effective_vrc_base:.0f} ms (Z: {z_vrc:+.1f})"
-        hrv_badge_bg = "rgba(16, 185, 129, 0.2)" if abs(z_vrc) <= 1.0 else "rgba(234, 179, 8, 0.2)"
-        hrv_badge_color = "#34d399" if abs(z_vrc) <= 1.0 else "#facc15"
-    else:
-        hrv_badge_txt = "A recolher dados..."
-        hrv_badge_bg = "rgba(148, 163, 184, 0.15)"
-        hrv_badge_color = "#94a3b8"
-
-    if rhr_curr is not None and rhr_mean is not None:
-        rhr_diff = rhr_curr - rhr_mean
-        rhr_badge_txt = f"{rhr_diff:+.1f} bpm vs base ({rhr_mean:.1f})"
-        rhr_badge_bg = "rgba(16, 185, 129, 0.2)" if rhr_diff <= 0 else "rgba(249, 115, 22, 0.2)"
-        rhr_badge_color = "#34d399" if rhr_diff <= 0 else "#fb923c"
-    else:
-        rhr_badge_txt = "A recolher dados..."
-        rhr_badge_bg = "rgba(148, 163, 184, 0.15)"
-        rhr_badge_color = "#94a3b8"
-
-    if diff_minutes is not None:
-        diff_badge_txt = f"Faltam {int(diff_minutes)} min" if diff_minutes > 0 else f"+{abs(int(diff_minutes))} min meta"
-        diff_badge_bg = "rgba(239, 68, 68, 0.2)" if diff_minutes > 0 else "rgba(16, 185, 129, 0.2)"
-        diff_badge_color = "#f87171" if diff_minutes > 0 else "#34d399"
-    else:
-        diff_badge_txt = "Meta: 8h"
-        diff_badge_bg = "rgba(148, 163, 184, 0.15)"
-        diff_badge_color = "#94a3b8"
+    z_vrc = (hrv_curr - effective_vrc_base) / hrv_sd if (hrv_curr is not None and effective_vrc_base is not None) else 0.0
 
     c1, c2, c3, c4, c5 = st.columns(5)
-
     with c1:
         st.markdown(f"""
         <div style="background:#131a27; border:1px solid #263244; padding:12px; border-radius:12px;">
             <span style="color:#94a3b8; font-size:0.8rem;">HRV</span><br>
             <span style="font-size:1.6rem; font-weight:700; color:#e2e8f0;">{_fmt(hrv_curr, 0, ' ms')}</span><br>
-            <div style="margin-top:4px; padding:2px 6px; border-radius:4px; background:{hrv_badge_bg}; color:{hrv_badge_color}; font-size:0.72rem; font-weight:600;">{escape(hrv_badge_txt)}</div>
+            <div style="margin-top:4px; padding:2px 6px; border-radius:4px; background:rgba(16, 185, 129, 0.2); color:#34d399; font-size:0.72rem; font-weight:600;">Baseline: {_fmt(effective_vrc_base, 0)} ms (Z: {z_vrc:+.1f})</div>
         </div>
         """, unsafe_allow_html=True)
 
     with c2:
+        rhr_diff = (rhr_curr - rhr_mean) if (rhr_curr and rhr_mean) else 0.0
         st.markdown(f"""
         <div style="background:#131a27; border:1px solid #263244; padding:12px; border-radius:12px;">
             <span style="color:#94a3b8; font-size:0.8rem;">Resting HR</span><br>
             <span style="font-size:1.6rem; font-weight:700; color:#e2e8f0;">{_fmt(rhr_curr, 0, ' bpm')}</span><br>
-            <div style="margin-top:4px; padding:2px 6px; border-radius:4px; background:{rhr_badge_bg}; color:{rhr_badge_color}; font-size:0.72rem; font-weight:600;">{escape(rhr_badge_txt)}</div>
+            <div style="margin-top:4px; padding:2px 6px; border-radius:4px; background:rgba(16, 185, 129, 0.2); color:#34d399; font-size:0.72rem; font-weight:600;">{rhr_diff:+.1f} bpm vs base</div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -187,7 +146,7 @@ def render_today_page(base_df: pd.DataFrame, hrv_mean: Optional[float], rhr_mean
         <div style="background:#131a27; border:1px solid #263244; padding:12px; border-radius:12px;">
             <span style="color:#94a3b8; font-size:0.8rem;">Sleep</span><br>
             <span style="font-size:1.6rem; font-weight:700; color:#e2e8f0;">{_fmt_hours_to_hm(sleep_hours_curr)}</span><br>
-            <div style="margin-top:4px; padding:2px 6px; border-radius:4px; background:{diff_badge_bg}; color:{diff_badge_color}; font-size:0.72rem; font-weight:600;">{escape(diff_badge_txt)}</div>
+            <div style="margin-top:4px; padding:2px 6px; border-radius:4px; background:rgba(16, 185, 129, 0.2); color:#34d399; font-size:0.72rem; font-weight:600;">Meta 8h</div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -211,9 +170,7 @@ def render_today_page(base_df: pd.DataFrame, hrv_mean: Optional[float], rhr_mean
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # -------------------------------------------------------------------------
-    # RENDERIZAR PILAR 1 DETALHADO (RECOVERY & READINESS)
-    # -------------------------------------------------------------------------
+    # PILAR 1: RECOVERY & READINESS
     render_pillar_recovery(
         base_df=base_df, hrv_mean=hrv_mean, rhr_mean=rhr_mean,
         hrv_curr=hrv_curr, rhr_curr=rhr_curr, sleep_curr=sleep_curr,
@@ -225,36 +182,20 @@ def render_today_page(base_df: pd.DataFrame, hrv_mean: Optional[float], rhr_mean
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # -------------------------------------------------------------------------
-    # RENDERIZAR PILAR 2 DETALHADO (TRAINING & PERFORMANCE)
-    # -------------------------------------------------------------------------
+    # PILAR 2: TRAINING & PERFORMANCE
     render_pillar_training(base_df=base_df, mode=saved_mode)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # -------------------------------------------------------------------------
-    # PILAR 03 — STRENGTH, MOVEMENT & DURABILITY
-    # -------------------------------------------------------------------------
-    st.markdown("### 03 — Strength, Movement & Durability")
-    st.caption("Running dynamics · Cycling · Strength development · Equipment")
-    with st.expander("View movement and strength analysis ↓", expanded=False):
-        st.markdown("#### Prescrição e Engine de Força")
-        duration_cap = st.slider("Tempo disponível para treino de força (min)", 20, 90, 45)
-        session = core.build_strength_session(decision["cap"], time_min=duration_cap)
-        st.markdown(f"**Carga Axial Estimada:** {session['spinal_score']}/5")
-        for exercise in session["exercises"]:
-            st.write(f"• **{exercise['name']}** — {exercise['sets']}×{exercise['reps']} (RIR {exercise['rir']})")
+    # PILAR 3: STRENGTH, MOVEMENT & DURABILITY
+    render_pillar_strength(base_df=base_df, decision_cap=decision["cap"])
+
+    # CAMADA TRANSVERSAL: NUTRIÇÃO, HIDRATAÇÃO & HABITOS
+    render_nutrition_habits_layer()
 
     st.markdown("<br>", unsafe_allow_html=True)
-
-    # Coach & Nutrition
-    st.markdown("### Fuel, Hydrate & Recover")
-    n1, n2, n3, n4 = st.columns(4)
-    n1.metric("Energia Diária", "2,450 kcal")
-    n2.metric("Proteína", "165g", "Meta 2.0g/kg")
-    n3.metric("Hidratação", "3.2 L")
-    n4.metric("Carboidratos Treino", "60g/h")
-
-    st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown("### 🤖 Coach Insight")
-    st.info("Sinais autónomos e carga acumulada em equilíbrio. O ACWR está estabilizado. Segue o planeamento para a sessão de hoje garantindo o reforço de hidratação pós-treino.")
+    st.markdown("### 🤖 APEX Coach Insight")
+    st.info(
+        "Fisiologia e biomecânica em total alinhamento. A resposta autónoma (VRC e FC repouso) é favorável. "
+        "Seguir o plano de treino mantendo a hidratação e reposição proteica pós-exercício."
+    )
