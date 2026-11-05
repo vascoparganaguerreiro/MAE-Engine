@@ -67,7 +67,7 @@ def _extract_readiness(data: Any) -> Optional[float]:
 def fetch_daily_metrics(
     email: str, password: str, target_date: Optional[date] = None
 ) -> Tuple[Dict[str, Optional[float]], List[str]]:
-    """"Log in and collect wellness data for target_date and historical backfill (last 14 days).""""
+    """Log in and collect wellness data for target_date and historical backfill (last 14 days)."""
     email = str(email or "").strip()
     password = str(password or "")
     if not email or not password:
@@ -76,7 +76,6 @@ def fetch_daily_metrics(
     base_date = target_date or date.today()
     warnings: List[str] = []
     
-    # Dicionário do dia alvo que o app.py vai receber de retorno direto
     target_result: Dict[str, Optional[float]] = {
         "hrv": None,
         "rhr": None,
@@ -91,7 +90,6 @@ def fetch_daily_metrics(
         if isinstance(login_result, tuple) and login_result[0] == "needs_mfa":
             raise RuntimeError("A Garmin account MFA challenge is required; MFA completion is not yet implemented in this UI.")
 
-        # Sincroniza os últimos 14 dias (incluindo o dia alvo)
         for i in range(13, -1, -1):
             current_day = base_date - timedelta(days=i)
             day_str = current_day.isoformat()
@@ -124,11 +122,9 @@ def fetch_daily_metrics(
                 except Exception:
                     pass
 
-            # Se for o dia alvo final, guarda para o retorno principal da função
             if current_day == base_date:
                 target_result = day_metrics
 
-            # Guarda também na base de dados SQLite local se a store estiver disponível
             try:
                 import data_store
                 store = data_store.get_store()
