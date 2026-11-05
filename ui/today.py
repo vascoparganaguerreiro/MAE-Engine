@@ -104,55 +104,134 @@ def render_today_page(base_df: pd.DataFrame, hrv_mean: Optional[float], rhr_mean
             except ValueError as exc:
                 st.error(str(exc))
 
-    # Fontes dos dados de hoje
+    # Fontes dos dados
     hrv_src = str(latest.get("hrv_source")) if pd.notna(latest.get("hrv_source")) else "Sem dado"
     rhr_src = str(latest.get("rhr_source")) if pd.notna(latest.get("rhr_source")) else "Sem dado"
     sleep_src = str(latest.get("sleep_hours_source")) if pd.notna(latest.get("sleep_hours_source")) else "Sem dado"
 
-    # 1. FC de repouso (subida acima da base = alerta/vermelho)
+    # --- CÁLCULO DE CORES FISIOLÓGICAS ---
+    
+    # 1. VRC (Análise por Desvio Padrão Z-Score)
+    hrv_sd = base_df["HRV"].tail(30).std() if len(base_df["HRV"].dropna()) >= 7 else 5.0
+    if pd.isna(hrv_sd) or hrv_sd == 0:
+        hrv_sd = 5.0
+        
+    if hrv_curr is not None and hrv_mean is not None:
+        z_vrc = (hrv_curr - hrv_mean) / hrv_sd
+        hrv_badge_txt = f"Base: {hrv_mean:.1f} ms (Z: {z_vrc:+.1f})"
+        if abs(z_vrc) <= 1.0:
+            hrv_badge_bg = "rgba(16, 185, 129, 0.2)"   # Verde (Normal)
+            hrv_badge_color = "#34d399"
+        elif 1.0 < z_vrc <= 1.5:
+            hrv_badge_bg = "rgba(234, 179, 8, 0.2)"    # Amarelo Esverdeado (Elevada)
+            hrv_badge_color = "#facc15"
+        elif -1.5 <= z_vrc < -1.0:
+            hrv_badge_bg = "rgba(249, 115, 22, 0.2)"   # Laranja (Moderadamente Baixa)
+            hrv_badge_color = "#fb923c"
+        else:
+            hrv_badge_bg = "rgba(239, 68, 68, 0.2)"    # Vermelho (Desvio Acentuado)
+            hrv_badge_color = "#f87171"
+    else:
+        hrv_badge_txt = f"Base: {_fmt(hrv_mean, 1, ' ms')}" if hrv_mean is not None else f"[{hrv_src}]"
+        hrv_badge_bg = "rgba(148, 163, 184, 0.15)"
+        hrv_badge_color = "#94a3b8"
+
+    # 2. FC de Repouso (Subida = Laranja/Vermelho dependendo da magnitude)
     if rhr_curr is not None and rhr_mean is not None:
         rhr_diff = rhr_curr - rhr_mean
-        rhr_delta_str = f"{rhr_diff:+.1f} bpm vs base ({rhr_mean:.1f})"
-        rhr_color = "inverse" if rhr_diff > 1.0 else "normal"
+        rhr_badge_txt = f"{rhr_diff:+.1f} bpm vs base ({rhr_mean:.1f})"
+        if rhr_diff <= 0:
+            rhr_badge_bg = "rgba(16, 185, 129, 0.2)"   # Verde (Excelente)
+            rhr_badge_color = "#34d399"
+        elif 0 < rhr_diff <= 2.0:
+            rhr_badge_bg = "rgba(249, 115, 22, 0.2)"   # Laranja (Subida ligeira)
+            rhr_badge_color = "#fb923c"
+        else:
+            rhr_badge_bg = "rgba(239, 68, 68, 0.2)"    # Vermelho (Subida acentuada)
+            rhr_badge_color = "#f87171"
     else:
-        rhr_delta_str = f"Base: {_fmt(rhr_mean, 1, ' bpm')}" if rhr_mean is not None else f"[{rhr_src}]"
-        rhr_color = "normal"
+        rhr_badge_txt = f"Base: {_fmt(rhr_mean, 1, ' bpm')}" if rhr_mean is not None else f"[{rhr_src}]"
+        rhr_badge_bg = "rgba(148, 163, 184, 0.15)"
+        rhr_badge_color = "#94a3b8"
 
-    # 2. Défice de sono (défice real > 0 = alerta/vermelho; excedente <= 0 = bom/verde)
+    # 3. Sono Score
+    sleep_badge_txt = f"Score: {_fmt(sleep_curr, 0)}" if sleep_curr is not None else f"[{sleep_src}]"
+    sleep_badge_bg = "rgba(16, 185, 129, 0.2)" if (sleep_curr or 0) >= 75 else "rgba(234, 179, 8, 0.2)"
+    sleep_badge_color = "#34d399" if (sleep_curr or 0) >= 75 else "#facc15"
+
+    # 4. Défice de Sono
     if diff_minutes is not None:
         if diff_minutes > 0:
-            sleep_delta_str = f"Faltam {int(diff_minutes)} min para a meta"
-            sleep_color = "inverse"
+            diff_badge_txt = f"Faltam {int(diff_minutes)} min para a meta"
+            diff_badge_bg = "rgba(239, 68, 68, 0.2)"    # Vermelho/Alerta
+            diff_badge_color = "#f87171"
         else:
-            sleep_delta_str = f"+{abs(int(diff_minutes))} min acima da meta"
-            sleep_color = "normal"
+            diff_badge_txt = f"+{abs(int(diff_minutes))} min acima da meta"
+            diff_badge_bg = "rgba(16, 185, 129, 0.2)"   # Verde/Excelente
+            diff_badge_color = "#34d399"
     else:
-        sleep_delta_str = f"Meta Garmin: {_fmt_hours_to_hm(sleep_target_curr)}" if sleep_target_curr else "Meta: 8h"
-        sleep_color = "normal"
+        diff_badge_txt = f"Meta Garmin: {_fmt_hours_to_hm(sleep_target_curr)}" if sleep_target_curr else "Meta: 8h"
+        diff_badge_bg = "rgba(148, 163, 184, 0.15)"
+        diff_badge_color = "#94a3b8"
 
+    # --- RENDERIZAÇÃO DOS CARTÕES COM STYLED BADGES ---
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric(
-        "VRC noturna",
-        _fmt(hrv_curr, 0, " ms"),
-        f"Base: {_fmt(hrv_mean, 1, ' ms')}" if hrv_mean is not None else f"[{hrv_src}]"
-    )
-    c2.metric(
-        "FC repouso",
-        _fmt(rhr_curr, 0, " bpm"),
-        rhr_delta_str,
-        delta_color=rhr_color
-    )
-    c3.metric(
-        "Sono",
-        _fmt_hours_to_hm(sleep_hours_curr),
-        f"Score: {_fmt(sleep_curr, 0)}" if sleep_curr is not None else f"[{sleep_src}]"
-    )
-    c4.metric(
-        "Défice de sono",
-        _fmt_minutes_diff(diff_minutes),
-        sleep_delta_str,
-        delta_color=sleep_color
-    )
+
+    with c1:
+        st.markdown(
+            f"""
+            <div style="background:#131a27; border:1px solid #263244; padding:14px; border-radius:12px;">
+                <span style="color:#94a3b8; font-size:0.85rem;">VRC noturna</span><br>
+                <span style="font-size:1.8rem; font-weight:700; color:#e2e8f0;">{_fmt(hrv_curr, 0, ' ms')}</span><br>
+                <div style="margin-top:6px; display:inline-block; padding:3px 8px; border-radius:6px; background:{hrv_badge_bg}; color:{hrv_badge_color}; font-size:0.78rem; font-weight:600;">
+                    ↑ {escape(hrv_badge_txt)}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    with c2:
+        st.markdown(
+            f"""
+            <div style="background:#131a27; border:1px solid #263244; padding:14px; border-radius:12px;">
+                <span style="color:#94a3b8; font-size:0.85rem;">FC repouso</span><br>
+                <span style="font-size:1.8rem; font-weight:700; color:#e2e8f0;">{_fmt(rhr_curr, 0, ' bpm')}</span><br>
+                <div style="margin-top:6px; display:inline-block; padding:3px 8px; border-radius:6px; background:{rhr_badge_bg}; color:{rhr_badge_color}; font-size:0.78rem; font-weight:600;">
+                    ↑ {escape(rhr_badge_txt)}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    with c3:
+        st.markdown(
+            f"""
+            <div style="background:#131a27; border:1px solid #263244; padding:14px; border-radius:12px;">
+                <span style="color:#94a3b8; font-size:0.85rem;">Sono</span><br>
+                <span style="font-size:1.8rem; font-weight:700; color:#e2e8f0;">{_fmt_hours_to_hm(sleep_hours_curr)}</span><br>
+                <div style="margin-top:6px; display:inline-block; padding:3px 8px; border-radius:6px; background:{sleep_badge_bg}; color:{sleep_badge_color}; font-size:0.78rem; font-weight:600;">
+                    ↑ {escape(sleep_badge_txt)}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    with c4:
+        st.markdown(
+            f"""
+            <div style="background:#131a27; border:1px solid #263244; padding:14px; border-radius:12px;">
+                <span style="color:#94a3b8; font-size:0.85rem;">Défice de sono</span><br>
+                <span style="font-size:1.8rem; font-weight:700; color:#e2e8f0;">{_fmt_minutes_diff(diff_minutes)}</span><br>
+                <div style="margin-top:6px; display:inline-block; padding:3px 8px; border-radius:6px; background:{diff_badge_bg}; color:{diff_badge_color}; font-size:0.78rem; font-weight:600;">
+                    ↑ {escape(diff_badge_txt)}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
     st.divider()
 
