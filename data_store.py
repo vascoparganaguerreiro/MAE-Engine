@@ -183,9 +183,11 @@ def upsert_daily_metrics(target_date: date, metrics: Dict[str, Any], source: str
         
         for k, v in metrics.items():
             if k in DAILY_FIELDS:
-                data[k] = v
-                if source:
-                    data[f"{k}_source"] = source
+                # Preserva valores existentes se a nova métrica for nula / N/A
+                if v is not None and not (isinstance(v, float) and np.isnan(v)):
+                    data[k] = v
+                    if source:
+                        data[f"{k}_source"] = source
                     
         data["updated_at"] = now_str
         
