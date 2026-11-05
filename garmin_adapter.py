@@ -1,4 +1,4 @@
-""""Best-effort adapter for python-garminconnect with multi-day history backfill."""
+"""Best-effort adapter for python-garminconnect with multi-day history backfill."""
 
 from __future__ import annotations
 
