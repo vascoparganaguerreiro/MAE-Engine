@@ -40,6 +40,31 @@ st.markdown(
       .apex-warn { border-left:5px solid #f59e0b; }
       .apex-alert { border-left:5px solid #ef4444; }
       .muted { color:#94a3b8; font-size:.88rem; }
+      
+      /* Botão Premium Sync Data */
+      div.stButton > button.apex-sync-btn {
+          background: linear-gradient(135deg, #0ea5e9 0%, #2563eb 100%);
+          color: #ffffff;
+          font-weight: 700;
+          font-size: 0.95rem;
+          letter-spacing: 0.5px;
+          border: none;
+          border-radius: 10px;
+          padding: 10px 24px;
+          box-shadow: 0 4px 14px 0 rgba(14, 165, 233, 0.35);
+          transition: all 0.3s ease;
+          width: 100%;
+          cursor: pointer;
+      }
+      div.stButton > button.apex-sync-btn:hover {
+          background: linear-gradient(135deg, #38bdf8 0%, #1d4ed8 100%);
+          box-shadow: 0 6px 20px 0 rgba(14, 165, 233, 0.55);
+          transform: translateY(-1px);
+      }
+      div.stButton > button.apex-sync-btn:active {
+          transform: translateY(1px);
+          box-shadow: 0 2px 8px 0 rgba(14, 165, 233, 0.3);
+      }
     </style>
     """,
     unsafe_allow_html=True,
@@ -87,10 +112,19 @@ def _clean_number(value: Any) -> Optional[float]:
         return None
 
 
-def _garmin_sync_callback() -> None:
-    """Callback que executa a sincronização com a conta Garmin Connect."""
-    email = str(st.session_state.get("garmin_email_input", "")).strip()
-    password = str(st.session_state.get("garmin_password_input", ""))
+def _run_garmin_sync(email_override: Optional[str] = None, password_override: Optional[str] = None) -> bool:
+    """Executa a sincronização direta com os servidores Garmin Connect."""
+    email = email_override or _secret("GARMIN_EMAIL") or str(st.session_state.get("garmin_email_input", "")).strip()
+    password = password_override or _secret("GARMIN_PASSWORD") or str(st.session_state.get("garmin_password_input", ""))
+    
+    if not email or not password:
+        st.session_state["garmin_sync_result"] = {
+            "ok": False,
+            "message": "Insere as credenciais da Garmin ou introduz-as no expansor de Sincronização.",
+            "warnings": [],
+        }
+        return False
+
     try:
         metrics, warnings = fetch_garmin_metrics(email, password, date.today())
         if metrics:
@@ -98,21 +132,24 @@ def _garmin_sync_callback() -> None:
             store.set_setting("garmin_last_sync", datetime.now().isoformat(timespec="seconds"))
             st.session_state["garmin_sync_result"] = {
                 "ok": True,
-                "message": "Sincronização concluída com sucesso! Métricas atualizadas no SQLite.",
+                "message": "Sincronização efetuada com sucesso! Métricas atualizadas no SQLite.",
                 "warnings": warnings,
             }
+            return True
         else:
             st.session_state["garmin_sync_result"] = {
                 "ok": False,
-                "message": "A Garmin respondeu, mas não foram encontradas métricas para o dia de hoje.",
+                "message": "Sem dados novos retornados da Garmin para o dia de hoje.",
                 "warnings": warnings,
             }
+            return False
     except Exception as exc:
         st.session_state["garmin_sync_result"] = {
             "ok": False,
-            "message": f"A sincronização falhou ({type(exc).__name__}). Confirma as tuas credenciais.",
+            "message": f"Erro na sincronização ({type(exc).__name__}). Confirma o e-mail e palavra-passe.",
             "warnings": [],
         }
+        return False
     finally:
         st.session_state["garmin_email_input"] = ""
         st.session_state["garmin_password_input"] = ""
@@ -189,17 +226,14 @@ def _parse_garmin_file_content(file_name: str, content: bytes) -> List[Dict[str,
 
                     rec: Dict[str, Any] = {"date": d_str}
 
-                    # Frequência Cardíaca de Repouso (RHR)
                     rhr_val = item.get("restingHeartRate") or item.get("rhr")
                     if rhr_val is not None:
                         rec["rhr"] = _clean_number(rhr_val)
 
-                    # VRC (HRV)
                     hrv_val = item.get("lastNightAvg") or item.get("hrvSummary", {}).get("lastNightAvg")
                     if hrv_val is not None:
                         rec["hrv"] = _clean_number(hrv_val)
 
-                    # Training Readiness
                     readiness_val = (
                         item.get("score")
                         or item.get("trainingReadinessScore")
@@ -209,7 +243,6 @@ def _parse_garmin_file_content(file_name: str, content: bytes) -> List[Dict[str,
                     if readiness_val is not None:
                         rec["vendor_readiness"] = _clean_number(readiness_val)
 
-                    # Sono (Horas e Score)
                     sleep_dto = item.get("userDailySleepDTO") or item
                     sleep_sec = (
                         sleep_dto.get("sleepTimeSeconds")
@@ -322,7 +355,10 @@ with st.sidebar.expander("⌚ Sincronização Garmin", expanded=False):
     with st.form("garmin_sync_form", clear_on_submit=True):
         st.text_input("E-mail Garmin", key="garmin_email_input")
         st.text_input("Palavra-passe Garmin", type="password", key="garmin_password_input")
-        st.form_submit_button("Sincronizar dados disponíveis", on_click=_garmin_sync_callback, use_container_width=True)
+        if st.form_submit_button("Sincronizar dados disponíveis", use_container_width=True):
+            _run_garmin_sync()
+            st.rerun()
+            
     result = st.session_state.get("garmin_sync_result")
     if result:
         (st.success if result.get("ok") else st.error)(result.get("message", ""))
@@ -434,7 +470,6 @@ calib_state, calib_label = core.DataQualityEngine.get_calibration_state(hrv_vali
 zs_today = core.zscores_for_day(base_df, -1)
 readiness_data = core.compute_readiness(zs_today, mode=mode)
 
-# Forçar o valor do score principal a ser a Prontidão da Garmin se existente
 score = int(garmin_readiness_curr) if garmin_readiness_curr is not None else readiness_data["score"]
 decision = core.decision_for(score) if score is not None else {"cap": "full", "headline": "Sem prontidão", "tone": "amber"}
 hrv_context = core.get_hrv_context(hrv_curr, hrv_mean, base_hrv.sd if base_hrv else None)
@@ -460,7 +495,17 @@ st.info(
 # MODULE 1 — Today
 # -----------------------------------------------------------------------------
 if top_nav == "📌 Today / Decisão Diária":
-    st.subheader("📝 Daily Check-In")
+    head_col1, head_col2 = st.columns([3, 1])
+    with head_col1:
+        st.subheader("📝 Daily Check-In")
+    with head_col2:
+        if st.button("⚡ SYNC DATA", key="sync_data_top_btn", type="primary"):
+            with st.spinner("Sincronizando Garmin..."):
+                ok = _run_garmin_sync()
+                if ok:
+                    st.toast("Garmin sincronizada com sucesso!", icon="⚡")
+                st.rerun()
+
     with st.expander("Registar métricas de hoje ou corrigir um dia anterior", expanded=False):
         with st.form("daily_checkin_form"):
             check_day = st.date_input("Data do registo", value=today, max_value=today)
@@ -525,7 +570,7 @@ if top_nav == "📌 Today / Decisão Diária":
     else:
         st.markdown(
             '<div class="apex-note apex-warn"><b>Prontidão não disponível</b><br>'
-            'Prime a opção <b>Sincronizar dados disponíveis</b> no menu lateral (Sincronização Garmin) para descarregar o Training Readiness diretamente da tua conta.</div>',
+            'Clica no botão <b>⚡ SYNC DATA</b> no topo para sincronizar os dados mais recentes do teu relógio.</div>',
             unsafe_allow_html=True,
         )
 
