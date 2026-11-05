@@ -58,7 +58,7 @@ def fetch_daily_metrics(email: str, password: str, target_date: date, fetch_hist
     if prof:
         metrics["profile_extracted"] = prof
 
-    # 1. FC de repouso (Extração resiliente multiformato)
+    # 1. FC de repouso (Resiliente: get_rhr_day -> get_stats -> get_heart_rates)
     rhr_found = None
     try:
         hr_data = client.get_rhr_day(date_str)
@@ -69,13 +69,11 @@ def fetch_daily_metrics(email: str, password: str, target_date: date, fetch_hist
         elif isinstance(hr_data, (int, float)):
             rhr_found = float(hr_data)
 
-        # Fallback 1: Estatísticas gerais diárias
         if rhr_found is None:
             stats = client.get_stats(date_str)
             if isinstance(stats, dict):
                 rhr_found = stats.get("restingHeartRate") or stats.get("minHeartRate")
 
-        # Fallback 2: Dados detalhados de ritmo cardíaco
         if rhr_found is None:
             heart_data = client.get_heart_rates(date_str)
             if isinstance(heart_data, dict):
@@ -125,7 +123,7 @@ def fetch_daily_metrics(email: str, password: str, target_date: date, fetch_hist
     except Exception as exc:
         warnings.append(f"Não foi possível obter dados de sono: {exc}")
 
-    # 4. Prontidão Garmin Dinâmica (Métrica em tempo real pós-treino)
+    # 4. Prontidão Garmin Dinâmica (Pós-treino em tempo real)
     try:
         readiness_data = client.get_training_readiness(date_str)
         if isinstance(readiness_data, list) and len(readiness_data) > 0:
@@ -188,3 +186,40 @@ def fetch_daily_metrics(email: str, password: str, target_date: date, fetch_hist
             time.sleep(0.05)
 
     return metrics, historical_records, warnings
+
+
+def fetch_historical_metrics(email: str, password: str, days: int = 30) -> List[Dict[str, Any]]:
+    client = Garmin(email, password)
+    client.login()
+    
+    end_d = date.today()
+    records: List[Dict[str, Any]] = []
+
+    for i in range(days):
+        target_d = end_d - timedelta(days=i)
+        d_str = target_d.isoformat()
+        rec: Dict[str, Any] = {"date": d_str}
+        
+        try:
+            hrv_data = client.get_hrv_data(d_str)
+            if isinstance(hrv_data, dict):
+                summary = hrv_data.get("hrvSummary", {})
+                val = summary.get("lastNightAvg") or summary.get("weeklyAvg")
+                if val is not None:
+                    rec["hrv"] = float(val)
+        except Exception:
+            pass
+            
+        try:
+            hr_data = client.get_rhr_day(d_str)
+            if isinstance(hr_data, dict) and hr_data.get("restingHeartRate"):
+                rec["rhr"] = float(hr_data["restingHeartRate"])
+        except Exception:
+            pass
+
+        if len(rec) > 1:
+            records.append(rec)
+            
+        time.sleep(0.1)
+
+    return records
