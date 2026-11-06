@@ -9,6 +9,8 @@ import streamlit as st
 
 import data_store as store
 import engine_core as core
+from models.telemetry_schema import MetricValue
+from ui.components import render_metric_field
 
 
 def _fmt(value: Any, digits: int = 1, suffix: str = "") -> str:
@@ -92,16 +94,27 @@ def render_pillar_recovery(base_df: pd.DataFrame, hrv_mean: Optional[float], rhr
         )
 
     with c3:
+        # Dynamic extraction from telemetry dataframe instead of fixed hardcoded integers
+        bb_val = latest.get("body_battery") if pd.notna(latest.get("body_battery")) else None
+        bb_recharge = latest.get("body_battery_recharge") if pd.notna(latest.get("body_battery_recharge")) else None
+        stress_val = latest.get("stress_avg") if pd.notna(latest.get("stress_avg")) else None
+        resp_val = latest.get("respiration_rate") if pd.notna(latest.get("respiration_rate")) else None
+
+        bb_str = f"{int(bb_val)} / 100" if bb_val is not None else "—"
+        recharge_str = f"+{int(bb_recharge)} pts" if bb_recharge is not None else "—"
+        stress_str = f"{int(stress_val)}" if stress_val is not None else "—"
+        resp_str = f"{_fmt(resp_val, 1)} brpm" if resp_val is not None else "—"
+
         st.markdown(
             f"""
             <div style="background:#131a27; border:1px solid #263244; padding:16px; border-radius:12px;">
                 <span style="color:#94a3b8; font-size:0.85rem; font-weight:600;">{'MÉTRICAS SECUNDÁRIAS' if is_pt else 'SECONDARY METRICS'}</span><br>
-                <span style="font-size:1.1rem; font-weight:700; color:#e2e8f0;">Body Battery: <b>85 / 100</b></span><br>
-                <span style="font-size:0.82rem; color:#14b8a6;">{'Recarga noturna:' if is_pt else 'Night Recharge:'} +65 pts</span><br>
+                <span style="font-size:1.1rem; font-weight:700; color:#e2e8f0;">Body Battery: <b>{bb_str}</b></span><br>
+                <span style="font-size:0.82rem; color:#14b8a6;">{'Recarga noturna:' if is_pt else 'Night Recharge:'} {recharge_str}</span><br>
                 <hr style="border-color:#263244; margin:8px 0;">
-                <span style="font-size:0.85rem; color:#cbd5e1;">{'Stress Diurno:' if is_pt else 'Daytime Stress:'} <b>24 ({'Baixo' if is_pt else 'Low'})</b></span><br>
-                <span style="font-size:0.85rem; color:#cbd5e1;">{'Respiração Noturna:' if is_pt else 'Overnight Respiration:'} <b>14.5 brpm</b></span><br>
-                <span style="font-size:0.75rem; color:#64748b;">{'Sinais contextuais' if is_pt else 'Contextual signals'}</span>
+                <span style="font-size:0.85rem; color:#cbd5e1;">{'Stress Diurno:' if is_pt else 'Daytime Stress:'} <b>{stress_str}</b></span><br>
+                <span style="font-size:0.85rem; color:#cbd5e1;">{'Respiração Noturna:' if is_pt else 'Overnight Respiration:'} <b>{resp_str}</b></span><br>
+                <span style="font-size:0.75rem; color:#64748b;">{'Sinais Garmin Connect' if is_pt else 'Garmin Connect Telemetry'}</span>
             </div>
             """,
             unsafe_allow_html=True
@@ -115,21 +128,38 @@ def render_pillar_recovery(base_df: pd.DataFrame, hrv_mean: Optional[float], rhr
     s1, s2, s3, s4 = st.columns(4)
     s1.metric("Duração do Sono" if is_pt else "Total Sleep Duration", _fmt_hours_to_hm(sleep_hours_curr))
     s2.metric("Garmin Sleep Score", _fmt(sleep_curr, 0))
-    s3.metric("Défice de Sono" if is_pt else "Sleep Deficit / Surplus", f"{int(diff_minutes)} min deficit" if diff_minutes and diff_minutes > 0 else f"+{abs(int(diff_minutes or 0))} min surplus")
-    s4.metric("Consistência" if is_pt else "Bedtime Consistency", "Regular (±15 min)")
+    s3.metric("Défice de Sono" if is_pt else "Sleep Deficit / Surplus", f"{int(diff_minutes)} min deficit" if diff_minutes and diff_minutes > 0 else f"+{abs(int(diff_minutes or 0))} min surplus" if diff_minutes is not None else "—")
+    s4.metric("Consistência" if is_pt else "Bedtime Consistency", "Garmin Synced" if sleep_hours_curr else "—")
 
     st.markdown("#### Sleep Stage Timeline (Wearable Estimate)" if not is_pt else "#### Fases do Sono (Estimativa Wearable)")
-    st.markdown(
-        f"""
-        <div style="display:flex; height:24px; border-radius:8px; overflow:hidden; margin-bottom:8px;">
-            <div style="width:20%; background:#1e3a8a; text-align:center; color:#93c5fd; font-size:0.75rem; line-height:24px;">{'Profundo (20%)' if is_pt else 'Deep (20%)'}</div>
-            <div style="width:25%; background:#3b82f6; text-align:center; color:#ffffff; font-size:0.75rem; line-height:24px;">REM (25%)</div>
-            <div style="width:45%; background:#1d4ed8; text-align:center; color:#bfdbfe; font-size:0.75rem; line-height:24px;">{'Leve (45%)' if is_pt else 'Light (45%)'}</div>
-            <div style="width:10%; background:#ef4444; text-align:center; color:#ffffff; font-size:0.75rem; line-height:24px;">{'Acordado (10%)' if is_pt else 'Awake (10%)'}</div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+    
+    # Dynamic calculations of sleep stages from latest entry
+    deep_m = latest.get("sleep_deep_minutes") if pd.notna(latest.get("sleep_deep_minutes")) else None
+    rem_m = latest.get("sleep_rem_minutes") if pd.notna(latest.get("sleep_rem_minutes")) else None
+    light_m = latest.get("sleep_light_minutes") if pd.notna(latest.get("sleep_light_minutes")) else None
+    awake_m = latest.get("sleep_awake_minutes") if pd.notna(latest.get("sleep_awake_minutes")) else None
+
+    if all(v is not None for v in [deep_m, rem_m, light_m, awake_m]) and (deep_m + rem_m + light_m + awake_m) > 0:
+        total_m = deep_m + rem_m + light_m + awake_m
+        p_deep = int(round((deep_m / total_m) * 100))
+        p_rem = int(round((rem_m / total_m) * 100))
+        p_light = int(round((light_m / total_m) * 100))
+        p_awake = int(round((awake_m / total_m) * 100))
+
+        st.markdown(
+            f"""
+            <div style="display:flex; height:24px; border-radius:8px; overflow:hidden; margin-bottom:8px;">
+                <div style="width:{p_deep}%; background:#1e3a8a; text-align:center; color:#93c5fd; font-size:0.75rem; line-height:24px;">{'Profundo' if is_pt else 'Deep'} ({p_deep}%)</div>
+                <div style="width:{p_rem}%; background:#3b82f6; text-align:center; color:#ffffff; font-size:0.75rem; line-height:24px;">REM ({p_rem}%)</div>
+                <div style="width:{p_light}%; background:#1d4ed8; text-align:center; color:#bfdbfe; font-size:0.75rem; line-height:24px;">{'Leve' if is_pt else 'Light'} ({p_light}%)</div>
+                <div style="width:{p_awake}%; background:#ef4444; text-align:center; color:#ffffff; font-size:0.75rem; line-height:24px;">{'Acordado' if is_pt else 'Awake'} ({p_awake}%)</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+    else:
+        st.info("⚠️ **Sleep Stages Unavailable:** No detailed sleep stage breakdown recorded by Garmin for this date." if not is_pt else "⚠️ **Fases do Sono Indisponíveis:** Sem registo detalhado de fases do sono Garmin para esta data.")
+
     st.caption(
         "⚠️ **APEX Scientific Note:** Sleep stages are estimates derived from actigraphy and optical pulse rate variability, "
         "not direct brain activity measurements (Polysomnography / EEG). APEX prioritizes total sleep duration, regularity, and longitudinal trends over absolute stage precision."
@@ -187,7 +217,7 @@ def render_pillar_recovery(base_df: pd.DataFrame, hrv_mean: Optional[float], rhr
             f"""
             <div style="background:#131a27; border:1px solid #334155; padding:14px; border-radius:10px;">
                 <span style="color:#94a3b8; font-size:0.85rem;">GARMIN TRAINING READINESS (NATIVE)</span><br>
-                <span style="font-size:1.8rem; font-weight:800; color:#38bdf8;">{garmin_readiness_curr or '—'} / 100</span><br>
+                <span style="font-size:1.8rem; font-weight:800; color:#38bdf8;">{_fmt(garmin_readiness_curr, 0)} / 100</span><br>
                 <span style="font-size:0.78rem; color:#94a3b8;">{'Includes: Sleep, HRV History, Acute Load, and Stress.' if not is_pt else 'Incorpora: Sono, Histórico VRC, Carga Aguda e Stress.'}</span>
             </div>
             """,
@@ -195,12 +225,12 @@ def render_pillar_recovery(base_df: pd.DataFrame, hrv_mean: Optional[float], rhr
         )
 
     with rc2:
-        apex_calculated_score = score or 75
+        apex_calculated_score = f"{score} / 100" if score is not None else "Not Calculated"
         st.markdown(
             f"""
             <div style="background:#131a27; border:1px solid #334155; padding:14px; border-radius:10px;">
                 <span style="color:#94a3b8; font-size:0.85rem;">APEX INDEPENDENT SCORE</span><br>
-                <span style="font-size:1.8rem; font-weight:800; color:#14b8a6;">{apex_calculated_score} / 100</span><br>
+                <span style="font-size:1.8rem; font-weight:800; color:#14b8a6;">{apex_calculated_score}</span><br>
                 <span style="font-size:0.78rem; color:#94a3b8;">{'Calculated via local HRV Z-score + Athlete Check-In.' if not is_pt else 'Calculado via Z-score VRC + Check-In Subjetivo.'}</span>
             </div>
             """,
