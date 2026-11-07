@@ -15,28 +15,37 @@ def render_login_component():
     if "user" not in st.session_state:
         st.session_state["user"] = None
 
-    # Se já existir utilizador na sessão, retorna-o diretamente
     if st.session_state["user"] is not None:
         return st.session_state["user"]
 
-    # Capturar e trocar o código de autorização do Google OAuth do URL
+    # Capturar e processar o 'code' do URL
     query_params = st.query_params
     if "code" in query_params:
         code = query_params["code"]
+        
+        # Limpar o URL imediatamente para evitar reutilização do código expirado
+        st.query_params.clear()
+        
         try:
-            response = supabase.auth.exchange_code_for_session(code)
+            # O SDK exige o dicionário com a chave "auth_code"
+            response = supabase.auth.exchange_code_for_session({"auth_code": code})
             if response and getattr(response, 'user', None):
                 st.session_state["user"] = response.user
             elif response and hasattr(response, 'session') and response.session:
                 st.session_state["user"] = response.session.user
             
-            # Limpa o URL para remover o código e faz rerun para entrar na app
-            st.query_params.clear()
             st.rerun()
-        except Exception as e:
-            st.error(f"Erro na autenticação Google: {e}")
+        except Exception:
+            # Se o código já foi consumido no reload anterior, tenta obter a sessão ativa
+            try:
+                session = supabase.auth.get_session()
+                if session and session.user:
+                    st.session_state["user"] = session.user
+                    st.rerun()
+            except Exception:
+                pass
 
-    # Verificar sessão ativa existente no cliente Supabase
+    # Verificar sessão ativa existente
     try:
         session = supabase.auth.get_session()
         if session and session.user:
