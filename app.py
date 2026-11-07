@@ -90,10 +90,13 @@ def _run_garmin_sync() -> bool:
 today = date.today()
 start_day = today - timedelta(days=60)
 dates = pd.date_range(start=start_day, end=today, freq="D")
+
 raw_daily = store.fetch_daily_metrics(start_day, today)
 raw_training = store.fetch_training_days(start_day, today)
 
 base_df = pd.DataFrame({"Date": dates})
+
+# 1. Fusão de Fisiologia Diária (Recovery / HRV / Sono)
 if not raw_daily.empty:
     raw_daily["Date"] = pd.to_datetime(raw_daily["date"])
     base_df = base_df.merge(raw_daily, on="Date", how="left")
@@ -112,6 +115,39 @@ base_df = base_df.rename(columns={
     "mood": "Mood", "vendor_readiness": "GarminReadiness",
 })
 
+# 2. Fusão de Carga de Treino Real (Ponto 4 Fix)
+if not raw_training.empty and "date" in raw_training.columns:
+    raw_training["Date"] = pd.to_datetime(raw_training["date"])
+    
+    # Agrupar treino diário (caso haja >1 sessão no mesmo dia)
+    daily_load_agg = raw_training.groupby("Date")["training_load"].sum().reset_index()
+    daily_load_agg = daily_load_agg.rename(columns={"training_load": "DailyLoad"})
+    
+    base_df = base_df.merge(daily_load_agg, on="Date", how="left")
+else:
+    base_df["DailyLoad"] = np.nan
+
+# Tratar dias sem treino explicitamente como carga 0 (em vez de NaN)
+base_df["DailyLoad"] = base_df["DailyLoad"].fillna(0.0)
+
+# 3. Cálculo Determinístico do Pipeline de Carga (CTL 42d / ATL 7d / TSB)
+ctl_list = []
+atl_list = []
+ctl = 0.0
+atl = 0.0
+
+for load in base_df["DailyLoad"]:
+    # Média Móvel Exponencial Ponderada (EWMA)
+    ctl = ctl + (load - ctl) / 42.0
+    atl = atl + (load - atl) / 7.0
+    ctl_list.append(ctl)
+    atl_list.append(atl)
+
+base_df["CTL"] = ctl_list
+base_df["ATL"] = atl_list
+base_df["TSB"] = base_df["CTL"] - base_df["ATL"]
+
+# Extração das Métricas para a UI
 hrv_curr = _clean_number(base_df["HRV"].iloc[-1])
 rhr_curr = _clean_number(base_df["RHR"].iloc[-1])
 sleep_curr = _clean_number(base_df["SleepScore"].iloc[-1])
