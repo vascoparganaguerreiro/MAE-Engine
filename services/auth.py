@@ -9,16 +9,12 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY") or st.secrets.get("SUPABASE_KEY", 
 def get_supabase_client() -> Client:
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
-def render_login_component():
-    supabase = get_supabase_client()
-    
-    if "user" not in st.session_state:
-        st.session_state["user"] = None
-
-    # Capturar e trocar o código de autorização do Google OAuth
+def process_oauth_callback():
+    """Processa o código retornado pelo Google OAuth no URL"""
     query_params = st.query_params
-    if "code" in query_params and st.session_state["user"] is None:
+    if "code" in query_params and st.session_state.get("user") is None:
         auth_code = query_params["code"]
+        supabase = get_supabase_client()
         try:
             res = supabase.auth.exchange_code_for_session({"auth_code": auth_code})
             if res and res.user:
@@ -27,16 +23,25 @@ def render_login_component():
                 st.session_state["user"] = res.session.user
             st.query_params.clear()
             st.rerun()
-        except Exception as e:
-            # Caso o código já tenha sido trocado ou expirado num reload anterior
+        except Exception:
+            # Se o código já foi trocado ou expirou num refresh prévio
             try:
-                session = supabase.auth.get_session()
-                if session and session.user:
-                    st.session_state["user"] = session.user
+                user_res = supabase.auth.get_user()
+                if user_res and user_res.user:
+                    st.session_state["user"] = user_res.user
                     st.query_params.clear()
                     st.rerun()
             except Exception:
                 pass
+
+def render_login_component():
+    supabase = get_supabase_client()
+    
+    # 1. Executar a verificação do OAuth imediatamente
+    process_oauth_callback()
+    
+    if "user" not in st.session_state:
+        st.session_state["user"] = None
 
     if st.session_state["user"] is not None:
         user = st.session_state["user"]
