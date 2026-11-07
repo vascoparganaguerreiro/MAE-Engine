@@ -5,9 +5,14 @@ from supabase import create_client, Client
 SUPABASE_URL = "https://quoafwluowkhjqqncnki.supabase.co"
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY") or st.secrets.get("SUPABASE_KEY", "")
 
-@st.cache_resource
 def get_supabase_client() -> Client:
-    return create_client(SUPABASE_URL, SUPABASE_KEY)
+    """
+    Guarda o cliente Supabase no session_state individual do utilizador.
+    NÃO utiliza @st.cache_resource para preservar o 'code_verifier' do OAuth PKCE.
+    """
+    if "supabase_client" not in st.session_state:
+        st.session_state["supabase_client"] = create_client(SUPABASE_URL, SUPABASE_KEY)
+    return st.session_state["supabase_client"]
 
 def render_login_component():
     supabase = get_supabase_client()
@@ -15,46 +20,51 @@ def render_login_component():
     if "user" not in st.session_state:
         st.session_state["user"] = None
 
+    # Se a sessão já estiver ativa, devolve o utilizador imediatamente
     if st.session_state["user"] is not None:
         return st.session_state["user"]
 
-    # Capturar e processar o 'code' do URL
+    # 1. Processar o parâmetro 'code' devolvido pelo Google OAuth no URL
     query_params = st.query_params
     if "code" in query_params:
-        code = query_params["code"]
-        
-        # Limpar o URL imediatamente para evitar reutilização do código expirado
+        auth_code = query_params["code"]
         st.query_params.clear()
         
         try:
-            # O SDK exige o dicionário com a chave "auth_code"
-            response = supabase.auth.exchange_code_for_session({"auth_code": code})
-            if response and getattr(response, 'user', None):
-                st.session_state["user"] = response.user
-            elif response and hasattr(response, 'session') and response.session:
-                st.session_state["user"] = response.session.user
-            
-            st.rerun()
-        except Exception:
-            # Se o código já foi consumido no reload anterior, tenta obter a sessão ativa
+            res = None
             try:
-                session = supabase.auth.get_session()
-                if session and session.user:
-                    st.session_state["user"] = session.user
-                    st.rerun()
+                res = supabase.auth.exchange_code_for_session({"auth_code": auth_code})
             except Exception:
-                pass
+                try:
+                    res = supabase.auth.exchange_code_for_session(auth_code)
+                except Exception:
+                    pass
 
-    # Verificar sessão ativa existente
+            if res and getattr(res, 'user', None):
+                st.session_state["user"] = res.user
+            elif res and hasattr(res, 'session') and res.session and getattr(res.session, 'user', None):
+                st.session_state["user"] = res.session.user
+            else:
+                session = supabase.auth.get_session()
+                if session and getattr(session, 'user', None):
+                    st.session_state["user"] = session.user
+
+            if st.session_state["user"] is not None:
+                st.rerun()
+
+        except Exception as e:
+            st.warning(f"Aviso de autenticação: {e}")
+
+    # 2. Verificar se já existe uma sessão ativa no cliente
     try:
         session = supabase.auth.get_session()
-        if session and session.user:
+        if session and getattr(session, 'user', None):
             st.session_state["user"] = session.user
             return session.user
     except Exception:
         pass
 
-    # Ecrã de Login / Registo com Design Luxury
+    # 3. Interface de Autenticação (Executive Design System)
     tab_login, tab_signup = st.tabs(["🔐 INICIAR SESSÃO", "📝 CRIAR CONTA"])
     
     with tab_login:
@@ -69,7 +79,7 @@ def render_login_component():
             if oauth_data and oauth_data.url:
                 st.link_button("🌐 INICIAR SESSÃO COM O GOOGLE", oauth_data.url, use_container_width=True)
         except Exception as e:
-            st.error(f"Erro ao ligar ao Google: {e}")
+            st.error(f"Erro ao gerar ligação Google: {e}")
 
         st.markdown("<div style='text-align: center; color: #475569; margin: 15px 0; font-size: 0.75rem; letter-spacing: 1px;'>— OU UTILIZE O E-MAIL —</div>", unsafe_allow_html=True)
 
@@ -98,7 +108,7 @@ def render_login_component():
             if oauth_data and oauth_data.url:
                 st.link_button("🌐 CRIAR CONTA COM O GOOGLE", oauth_data.url, use_container_width=True, key="btn_google_signup")
         except Exception as e:
-            st.error(f"Erro ao ligar ao Google: {e}")
+            st.error(f"Erro ao gerar ligação Google: {e}")
 
         st.markdown("<div style='text-align: center; color: #475569; margin: 15px 0; font-size: 0.75rem; letter-spacing: 1px;'>— OU REGISTE-SE COM E-MAIL —</div>", unsafe_allow_html=True)
 
@@ -114,7 +124,7 @@ def render_login_component():
                         "password": new_password,
                         "options": {"data": {"full_name": full_name}}
                     })
-                    st.success("Conta criada. Verifique o seu e-mail.")
+                    st.success("Conta criada com sucesso. Verifique o seu e-mail.")
                 except Exception as e:
                     st.error(f"Erro no registo: {e}")
 
