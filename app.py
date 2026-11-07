@@ -23,7 +23,7 @@ st.set_page_config(
 )
 store.init_db()
 
-# 🔐 Autenticação de Utilizador & Gestão de Sessão (Supabase EU)
+# 🔐 Autenticação de Utilizador & Gestão de Sessão (Supabase EU com captura OAuth integrada)
 user = auth.render_login_component()
 
 if user is None:
@@ -123,7 +123,7 @@ base_df = base_df.rename(columns={
     "mood": "Mood", "vendor_readiness": "GarminReadiness",
 })
 
-# 2. Fusão de Carga de Treino Real (Ponto 4 Fix)
+# 2. Fusão de Carga de Treino Real
 if not raw_training.empty and "date" in raw_training.columns:
     raw_training["Date"] = pd.to_datetime(raw_training["date"])
     
