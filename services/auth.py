@@ -15,21 +15,24 @@ def render_login_component():
     if "user" not in st.session_state:
         st.session_state["user"] = None
 
-    # Trata o retorno do Google OAuth (code no URL)
+    # Capturar e trocar o código de autorização do Google OAuth
     query_params = st.query_params
     if "code" in query_params and st.session_state["user"] is None:
         auth_code = query_params["code"]
         try:
             res = supabase.auth.exchange_code_for_session({"auth_code": auth_code})
-            st.session_state["user"] = res.user
+            if res and res.user:
+                st.session_state["user"] = res.user
+            elif res and res.session:
+                st.session_state["user"] = res.session.user
             st.query_params.clear()
             st.rerun()
         except Exception as e:
-            # Se a sessão já tiver sido trocada, tenta obter o utilizador atual
+            # Caso o código já tenha sido trocado ou expirado num reload anterior
             try:
-                user_res = supabase.auth.get_user()
-                if user_res and user_res.user:
-                    st.session_state["user"] = user_res.user
+                session = supabase.auth.get_session()
+                if session and session.user:
+                    st.session_state["user"] = session.user
                     st.query_params.clear()
                     st.rerun()
             except Exception:
@@ -40,8 +43,12 @@ def render_login_component():
         col1, col2 = st.columns([4, 1])
         col1.caption(f"👤 Sessão Ativa: **{user.email}**")
         if col2.button("Terminar Sessão", key="btn_logout"):
-            supabase.auth.sign_out()
+            try:
+                supabase.auth.sign_out()
+            except Exception:
+                pass
             st.session_state["user"] = None
+            st.query_params.clear()
             st.rerun()
         return user
 
