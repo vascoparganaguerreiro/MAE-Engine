@@ -48,14 +48,17 @@ def render_today_page(
         unsafe_allow_html=True,
     )
 
-    # --- CONTROL BAR (SYNC, PROFILE, LOGOUT) ---
+    # --- CONTROL BAR ---
     col_info, col_btns = st.columns([2, 1.3])
     with col_info:
         current_email = getattr(st.session_state.get("user"), "email", "")
+        last_sync = store.get_setting("garmin_last_sync", "Nunca")
         st.markdown(
             f"""
-            <div style="padding-top: 6px; font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; color: #94a3b8;">
+            <div style="padding-top: 4px; font-family: 'JetBrains Mono', monospace; font-size: 0.78rem; color: #94a3b8;">
                 <span style="color: #64748b;">Sessão Ativa:</span> <span style="color: #38bdf8;">{current_email}</span>
+                <span style="color: #475569; margin: 0 8px;">|</span>
+                <span style="color: #64748b;">Última Sync:</span> <span style="color: #cbd5e1;">{last_sync}</span>
             </div>
             """,
             unsafe_allow_html=True,
@@ -64,7 +67,7 @@ def render_today_page(
         c_sync, c_prof, c_out = st.columns([1.2, 1, 1])
         with c_sync:
             if st.button("⚡ Sync Garmin", use_container_width=True):
-                with st.spinner("Sincronizando..."):
+                with st.spinner("Conectando à Garmin..."):
                     sync_callback()
                     st.rerun()
         with c_prof:
@@ -75,13 +78,28 @@ def render_today_page(
                 auth.logout()
                 st.rerun()
 
-    # Modal de Definições
+    # Modal de Definições com Verificador de Ligação
     if st.session_state.get("show_settings_modal", False):
-        with st.expander("⚙️ Painel de Configurações Executivas", expanded=True):
+        with st.expander("⚙️ Painel de Diagnóstico & Credenciais Garmin", expanded=True):
             st.markdown("<div style='font-family: JetBrains Mono; font-size: 0.82rem; color: #38bdf8; margin-bottom: 8px;'>CREDENCIAIS GARMIN CONNECT</div>", unsafe_allow_html=True)
-            st.text_input("Garmin Email", value=st.session_state.get("garmin_email_input", ""), key="garmin_email_input")
-            st.text_input("Garmin Password", type="password", value=st.session_state.get("garmin_password_input", ""), key="garmin_password_input")
+            g_email = st.text_input("Garmin Email", value=st.session_state.get("garmin_email_input", ""), key="garmin_email_input")
+            g_pass = st.text_input("Garmin Password", type="password", value=st.session_state.get("garmin_password_input", ""), key="garmin_password_input")
             
+            # Badge de Estado da API
+            has_creds = bool(g_email and g_pass) or bool(st.secrets.get("GARMIN_EMAIL"))
+            status_color = "#10b981" if has_creds else "#f59e0b"
+            status_text = "CREDENCIAIS CONFIGURADAS" if has_creds else "CREDENCIAIS EM FALTA"
+            
+            st.markdown(
+                f"""
+                <div style="background: rgba(15, 23, 42, 0.6); padding: 10px 14px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.08); margin: 10px 0;">
+                    <span style="font-family: 'JetBrains Mono', monospace; font-size: 0.72rem; color: {status_color}; text-transform: uppercase;">● {status_text}</span>
+                    <div style="font-size: 0.8rem; color: #94a3b8; margin-top: 4px;">Dica: Sincroniza a aplicação oficial Garmin Connect no telemóvel antes de clicar em ⚡ Sync Garmin.</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
             curr_mode = store.get_setting("mode", "performance")
             new_mode = st.selectbox("Modo de Alocação Fisiológica", options=["performance", "longevity"], index=0 if curr_mode == "performance" else 1)
             if new_mode != curr_mode:
@@ -90,7 +108,7 @@ def render_today_page(
 
     st.markdown("<div style='margin-bottom: 16px;'></div>", unsafe_allow_html=True)
 
-    # --- NAVEGAÇÃO NATIVA POR SEPARADORES (CLICÁVEIS E FUNCIONAIS) ---
+    # --- SEPARADORES ---
     t0, t1, t2, t3, t4 = st.tabs([
         "00. DECISION",
         "01. RECOVERY & READINESS",
@@ -99,12 +117,10 @@ def render_today_page(
         "04. APEX INTELLIGENCE",
     ])
 
-    # === SEPARADOR 00: DECISION ===
     with t0:
         tone_color = "#10b981" if decision["tone"] == "green" else "#f59e0b" if decision["tone"] == "amber" else "#ef4444"
         score_display = f"{score}" if score is not None else "--"
 
-        # Card Principal de Prontidão
         st.markdown(
             f"""
             <div class="apex-card" style="border-left: 4px solid {tone_color};">
@@ -124,7 +140,6 @@ def render_today_page(
             unsafe_allow_html=True,
         )
 
-        # 5 Métricas Principais (Executive Cards)
         st.markdown("<div style='font-family: JetBrains Mono; font-size: 0.75rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.08em; margin: 20px 0 10px 0;'>Fisiologia & Carga Biológica</div>", unsafe_allow_html=True)
         m1, m2, m3, m4, m5 = st.columns(5)
 
@@ -199,8 +214,6 @@ def render_today_page(
                 unsafe_allow_html=True,
             )
 
-        # Gemini Insights Engine
-        st.markdown("<div style='margin-top: 15px;'></div>", unsafe_allow_html=True)
         summary_payload = {"hrv": hrv_curr, "sleep_hours": sleep_hours_curr, "readiness": score}
         insight_text = generate_apex_insights(summary_payload, lang="PT")
 
@@ -216,39 +229,22 @@ def render_today_page(
             unsafe_allow_html=True,
         )
 
-    # === SEPARADOR 01: RECOVERY & READINESS ===
     with t1:
         st.markdown("<div class='apex-card'><h3 style='font-family: JetBrains Mono; font-size: 1.1rem; color: #f8fafc;'>01. Fisiologia Noturna & Tendência de VRC</h3><p style='color: #94a3b8; font-size: 0.88rem;'>Compara a Variabilidade da Frequência Cardíaca (HRV) e RHR contra a tua linha de base de 60 dias.</p></div>", unsafe_allow_html=True)
         if not base_df.empty:
             st.line_chart(base_df.set_index("Date")[["HRV", "RHR"]].dropna())
-        else:
-            st.info("Sem dados de fisiologia suficientes para desenhar gráficos.")
 
-    # === SEPARADOR 02: TRAINING & PERFORMANCE ===
     with t2:
         st.markdown("<div class='apex-card'><h3 style='font-family: JetBrains Mono; font-size: 1.1rem; color: #f8fafc;'>02. Modelo de Carga Fisiológica Banister</h3><p style='color: #94a3b8; font-size: 0.88rem;'>Monitorização de Fitness (CTL 42d), Fadiga (ATL 7d) e Equilíbrio de Carga (TSB).</p></div>", unsafe_allow_html=True)
         if not base_df.empty and "CTL" in base_df:
             st.line_chart(base_df.set_index("Date")[["CTL", "ATL", "TSB"]].dropna())
-        else:
-            st.info("Sem histórico de treinos para calcular o modelo Banister.")
 
-    # === SEPARADOR 03: STRENGTH & MOVEMENT ===
     with t3:
         st.markdown("<div class='apex-card'><h3 style='font-family: JetBrains Mono; font-size: 1.1rem; color: #f8fafc;'>03. Prescrição Mecânica & Carga Espinal</h3><p style='color: #94a3b8; font-size: 0.88rem;'>Algoritmo de seleção de exercícios de força adaptado à prontidão do dia.</p></div>", unsafe_allow_html=True)
-        st.markdown(
-            f"""
-            <div class="apex-card">
-                <div style="font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; color: #38bdf8;">Capacidade Espinal Hoje: {decision['cap'].upper()}</div>
-                <div style="font-size: 0.85rem; color: #94a3b8; margin-top: 6px;">Sessão recomendada com base no índice de prontidão atual ({score_display}/100).</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
 
-    # === SEPARADOR 04: APEX INTELLIGENCE ===
     with t4:
         st.markdown("<div class='apex-card'><h3 style='font-family: JetBrains Mono; font-size: 1.1rem; color: #f8fafc;'>04. Consultoria Fisiológica Gemini APEX</h3><p style='color: #94a3b8; font-size: 0.88rem;'>Faz perguntas diretas sobre os teus dados fisiológicos, recuperação e estratégia de prova.</p></div>", unsafe_allow_html=True)
-        user_q = st.text_input("Escreve a tua questão para o Coach IA APEX:", placeholder="Ex: Devo fazer o treino de séries planeado para hoje com a minha VRC atual?")
+        user_q = st.text_input("Escreve a tua questão para o Coach IA APEX:")
         if user_q:
             with st.spinner("Analisando dados fisiológicos..."):
                 resp = generate_apex_insights({"hrv": hrv_curr, "sleep_hours": sleep_hours_curr, "readiness": score, "user_question": user_q}, lang="PT")
