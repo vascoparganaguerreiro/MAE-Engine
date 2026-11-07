@@ -16,28 +16,21 @@ def process_oauth_callback():
         auth_code = query_params["code"]
         supabase = get_supabase_client()
         try:
-            res = supabase.auth.exchange_code_for_session({"auth_code": auth_code})
+            # A função exchange_code_for_session recebe a string do código diretamente
+            res = supabase.auth.exchange_code_for_session(auth_code)
             if res and res.user:
                 st.session_state["user"] = res.user
-            elif res and res.session:
+            elif res and hasattr(res, 'session') and res.session and res.session.user:
                 st.session_state["user"] = res.session.user
             st.query_params.clear()
             st.rerun()
-        except Exception:
-            # Se o código já foi trocado ou expirou num refresh prévio
-            try:
-                user_res = supabase.auth.get_user()
-                if user_res and user_res.user:
-                    st.session_state["user"] = user_res.user
-                    st.query_params.clear()
-                    st.rerun()
-            except Exception:
-                pass
+        except Exception as e:
+            st.error(f"Erro ao trocar o código de sessão: {e}")
 
 def render_login_component():
     supabase = get_supabase_client()
     
-    # 1. Executar a verificação do OAuth imediatamente
+    # Executa a verificação do OAuth imediatamente no arranque
     process_oauth_callback()
     
     if "user" not in st.session_state:
