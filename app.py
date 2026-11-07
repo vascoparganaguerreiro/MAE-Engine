@@ -9,6 +9,7 @@ import streamlit as st
 
 import data_store as store
 import engine_core as core
+import services.auth as auth
 from integrations.garmin import fetch_daily_metrics as fetch_garmin_metrics
 from ui.today import render_today_page
 
@@ -21,6 +22,13 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 store.init_db()
+
+# 🔐 Autenticação de Utilizador & Gestão de Sessão (Supabase EU)
+user = auth.render_login_component()
+
+if user is None:
+    st.info("🔒 Por favor inicia sessão ou cria uma conta para aceder ao APEX Engine.")
+    st.stop()
 
 # Estilos CSS Globais — Paleta Semântica Restrita
 st.markdown(
@@ -119,7 +127,6 @@ base_df = base_df.rename(columns={
 if not raw_training.empty and "date" in raw_training.columns:
     raw_training["Date"] = pd.to_datetime(raw_training["date"])
     
-    # Agrupar treino diário (caso haja >1 sessão no mesmo dia)
     daily_load_agg = raw_training.groupby("Date")["training_load"].sum().reset_index()
     daily_load_agg = daily_load_agg.rename(columns={"training_load": "DailyLoad"})
     
@@ -127,7 +134,6 @@ if not raw_training.empty and "date" in raw_training.columns:
 else:
     base_df["DailyLoad"] = np.nan
 
-# Tratar dias sem treino explicitamente como carga 0 (em vez de NaN)
 base_df["DailyLoad"] = base_df["DailyLoad"].fillna(0.0)
 
 # 3. Cálculo Determinístico do Pipeline de Carga (CTL 42d / ATL 7d / TSB)
@@ -137,7 +143,6 @@ ctl = 0.0
 atl = 0.0
 
 for load in base_df["DailyLoad"]:
-    # Média Móvel Exponencial Ponderada (EWMA)
     ctl = ctl + (load - ctl) / 42.0
     atl = atl + (load - atl) / 7.0
     ctl_list.append(ctl)
