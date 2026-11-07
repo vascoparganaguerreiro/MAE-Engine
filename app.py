@@ -13,31 +13,99 @@ import services.auth as auth
 from integrations.garmin import fetch_daily_metrics as fetch_garmin_metrics
 from ui.today import render_today_page
 
-
-# Configuração Global Streamlit — Single Page Layout
+# Configuração Global Streamlit — Single Page Executive Layout
 st.set_page_config(
-    page_title="Apex Engine | Personal Performance & Longevity",
+    page_title="APEX ENGINE | Executive Physiology & Performance",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 store.init_db()
 
-# 🔐 Autenticação de Utilizador & Gestão de Sessão (Supabase EU com captura OAuth integrada)
+# 🔐 Autenticação de Utilizador & Gestão de Sessão
 user = auth.render_login_component()
 
 if user is None:
     st.info("🔒 Por favor inicia sessão ou cria uma conta para aceder ao APEX Engine.")
     st.stop()
 
-# Estilos CSS Globais — Paleta Semântica Restrita
+# Estilos CSS Globais — Ultra-Premium Executive Obsidian Theme
 st.markdown(
     """
     <style>
-      .stApp { background: #0b0f17; color: #e2e8f0; }
-      [data-testid="stHeader"] { background: rgba(11, 15, 23, 0.8); }
-      [data-testid="stSidebar"] { display: none; }
-      .muted { color:#94a3b8; font-size:.88rem; }
+      @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,700;1,400&family=Inter:wght@300;400;500;600;700&display=swap');
+
+      /* Reset & Global Canvas */
+      html, body, .stApp {
+          background-color: #05070a !important;
+          color: #f1f5f9 !important;
+          font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
+          letter-spacing: -0.01em;
+      }
+
+      [data-testid="stHeader"] {
+          background: rgba(5, 7, 10, 0.75) !important;
+          backdrop-filter: blur(12px) !important;
+          border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      }
+
+      [data-testid="stSidebar"] { display: none !important; }
+
+      /* Frosted Glass Container Base */
+      .apex-card {
+          background: rgba(15, 23, 42, 0.55);
+          backdrop-filter: blur(16px);
+          -webkit-backdrop-filter: blur(16px);
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          border-radius: 12px;
+          padding: 20px;
+          box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+          margin-bottom: 16px;
+          transition: transform 0.2s ease, border-color 0.2s ease;
+      }
+      .apex-card:hover {
+          border-color: rgba(255, 255, 255, 0.18);
+      }
+
+      /* Monospace Metrics Styling */
+      .mono-val {
+          font-family: 'JetBrains Mono', monospace !important;
+          font-weight: 700;
+          letter-spacing: -0.03em;
+      }
+      .mono-sub {
+          font-family: 'JetBrains Mono', monospace !important;
+          font-size: 0.75rem;
+          color: #94a3b8;
+      }
+
+      /* Buttons & Custom Controls */
+      .stButton > button {
+          background: rgba(255, 255, 255, 0.05) !important;
+          color: #f8fafc !important;
+          border: 1px solid rgba(255, 255, 255, 0.12) !important;
+          border-radius: 8px !important;
+          font-family: 'JetBrains Mono', monospace !important;
+          font-size: 0.8rem !important;
+          text-transform: uppercase !important;
+          letter-spacing: 0.05em !important;
+          transition: all 0.2s ease !important;
+      }
+      .stButton > button:hover {
+          background: rgba(255, 255, 255, 0.12) !important;
+          border-color: rgba(255, 255, 255, 0.3) !important;
+          box-shadow: 0 0 15px rgba(255, 255, 255, 0.1);
+      }
+
+      /* Native Selectboxes & Inputs Override */
+      div[data-baseweb="select"] > div {
+          background-color: rgba(15, 23, 42, 0.7) !important;
+          border-color: rgba(255, 255, 255, 0.1) !important;
+          color: #f8fafc !important;
+          border-radius: 8px !important;
+      }
+
+      .muted { color: #64748b; font-size: 0.82rem; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -53,8 +121,6 @@ def _clean_number(value: Any) -> Optional[float]:
 
 
 def _run_garmin_sync() -> bool:
-    """Pull today + recent history from Garmin and save it for the logged-in user.
-    Every failure leaves a visible message in st.session_state["garmin_sync_result"]."""
     from services.config import get_secret
 
     def _result(ok: bool, message: str, warnings=None) -> bool:
@@ -64,13 +130,12 @@ def _run_garmin_sync() -> bool:
     email = str(get_secret("GARMIN_EMAIL", "") or st.session_state.get("garmin_email_input", "")).strip()
     password = str(get_secret("GARMIN_PASSWORD", "") or st.session_state.get("garmin_password_input", ""))
     if not email or not password:
-        return _result(False, "Insere as credenciais da Garmin.")
+        return _result(False, "Insere as credenciais da Garmin nas definições.")
 
     try:
         metrics, history_recs, warnings = fetch_garmin_metrics(email, password, date.today(), fetch_history=True, history_days=30)
-    except Exception as exc:  # noqa: BLE001 - third-party login; never show the raw message (may echo the account)
-        return _result(False, f"Não foi possível sincronizar com a Garmin ({type(exc).__name__}). "
-                              "Confirma as credenciais, o MFA e tenta de novo.")
+    except Exception as exc:
+        return _result(False, f"Falha na ligação Garmin ({type(exc).__name__}). Confirma as credenciais.")
 
     saved_history = store.bulk_insert_garmin_history(history_recs) if history_recs else 0
 
@@ -82,15 +147,15 @@ def _run_garmin_sync() -> bool:
     saved_today = store.upsert_daily_metrics(date.today(), metrics, source="garmin") if metrics else False
     if saved_today or saved_history:
         store.set_setting("garmin_last_sync", datetime.now().isoformat(timespec="seconds"))
-        return _result(True, "Sincronização efetuada com sucesso!", warnings)
-    return _result(False, "A Garmin não devolveu métricas novas (confirma que o relógio já sincronizou com a app Garmin Connect).", warnings)
+        return _result(True, "Sincronização Garmin efetuada com sucesso!", warnings)
+    return _result(False, "Sem métricas novas devolvidas pela Garmin.", warnings)
 
 
 _sync_notice = st.session_state.pop("garmin_sync_result", None)
 if _sync_notice and not _sync_notice.get("ok"):
     st.warning(_sync_notice.get("message", "Falha na sincronização."))
 
-# Pipeline de Dados APEX
+# Pipeline Fisiológico APEX
 today = date.today()
 start_day = today - timedelta(days=60)
 dates = pd.date_range(start=start_day, end=today, freq="D")
@@ -100,7 +165,6 @@ raw_training = store.fetch_training_days(start_day, today)
 
 base_df = pd.DataFrame({"Date": dates})
 
-# 1. Fusão de Fisiologia Diária (Recovery / HRV / Sono)
 if not raw_daily.empty:
     raw_daily["Date"] = pd.to_datetime(raw_daily["date"])
     base_df = base_df.merge(raw_daily, on="Date", how="left")
@@ -119,28 +183,22 @@ base_df = base_df.rename(columns={
     "mood": "Mood", "vendor_readiness": "GarminReadiness",
 })
 
-# 2. Fusão de Carga de Treino Real
 if not raw_training.empty and "date" in raw_training.columns:
     raw_training["Date"] = pd.to_datetime(raw_training["date"])
-    
     daily_load_agg = raw_training.groupby("Date")["training_load"].sum().reset_index()
     daily_load_agg = daily_load_agg.rename(columns={"training_load": "DailyLoad"})
-    
     base_df = base_df.merge(daily_load_agg, on="Date", how="left")
 else:
     base_df["DailyLoad"] = np.nan
 
 base_df["DailyLoad"] = base_df["DailyLoad"].fillna(0.0)
 
-# 3. Cálculo Determinístico do Pipeline de Carga (CTL 42d / ATL 7d / TSB)
-ctl_list = []
-atl_list = []
-ctl = 0.0
-atl = 0.0
+ctl_list, atl_list = [], []
+ctl, atl = 0.0, 0.0
 
 for load in base_df["DailyLoad"]:
-    ctl = ctl + (load - ctl) / 42.0
-    atl = atl + (load - atl) / 7.0
+    ctl += (load - ctl) / 42.0
+    atl += (load - atl) / 7.0
     ctl_list.append(ctl)
     atl_list.append(atl)
 
@@ -148,7 +206,6 @@ base_df["CTL"] = ctl_list
 base_df["ATL"] = atl_list
 base_df["TSB"] = base_df["CTL"] - base_df["ATL"]
 
-# Extração das Métricas para a UI
 hrv_curr = _clean_number(base_df["HRV"].iloc[-1])
 rhr_curr = _clean_number(base_df["RHR"].iloc[-1])
 sleep_curr = _clean_number(base_df["SleepScore"].iloc[-1])
@@ -173,7 +230,7 @@ hrv_context = core.get_hrv_context(hrv_curr, hrv_mean, base_hrv.sd if base_hrv e
 effective_target = sleep_target_curr if sleep_target_curr is not None else 8.0
 diff_minutes = (effective_target - sleep_hours_curr) * 60.0 if sleep_hours_curr is not None else None
 
-# Renderizar Dashboard Único do APEX Engine
+# Renderizar Cockpit Executivo
 render_today_page(
     base_df=base_df, hrv_mean=hrv_mean, rhr_mean=rhr_mean,
     hrv_curr=hrv_curr, rhr_curr=rhr_curr, sleep_curr=sleep_curr,
