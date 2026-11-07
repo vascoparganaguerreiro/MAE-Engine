@@ -10,27 +10,36 @@ def get_supabase_client() -> Client:
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def process_oauth_callback():
-    """Processa o código retornado pelo Google OAuth no URL"""
+    """Processa o código retornado pelo Google OAuth no URL de forma segura"""
     query_params = st.query_params
     if "code" in query_params and st.session_state.get("user") is None:
         auth_code = query_params["code"]
         supabase = get_supabase_client()
+        
+        # Limpa o código do URL imediatamente para evitar reenvios duplicados
+        st.query_params.clear()
+        
         try:
-            # A função exchange_code_for_session recebe a string do código diretamente
             res = supabase.auth.exchange_code_for_session(auth_code)
-            if res and res.user:
+            if res and getattr(res, 'user', None):
                 st.session_state["user"] = res.user
             elif res and hasattr(res, 'session') and res.session and res.session.user:
                 st.session_state["user"] = res.session.user
-            st.query_params.clear()
             st.rerun()
-        except Exception as e:
-            st.error(f"Erro ao trocar o código de sessão: {e}")
+        except Exception:
+            # Se o código já foi consumido, valida se a sessão já está ativa
+            try:
+                session = supabase.auth.get_session()
+                if session and getattr(session, 'user', None):
+                    st.session_state["user"] = session.user
+                    st.rerun()
+            except Exception:
+                pass
 
 def render_login_component():
     supabase = get_supabase_client()
     
-    # Executa a verificação do OAuth imediatamente no arranque
+    # Executa a verificação do OAuth no arranque
     process_oauth_callback()
     
     if "user" not in st.session_state:
