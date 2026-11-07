@@ -28,21 +28,18 @@ def render_login_component():
     tab_login, tab_signup = st.tabs(["🔐 Iniciar Sessão", "📝 Criar Conta APEX"])
     
     with tab_login:
-        if st.button("🌐 Iniciar Sessão com o Google", use_container_width=True):
-            try:
-                res = supabase.auth.sign_in_with_oauth({
-                    "provider": "google",
-                    "options": {
-                        "redirect_to": "https://mae-engine.streamlit.app",
-                        "queryParams": {
-                            "prompt": "select_account"
-                        }
-                    }
-                })
-                if res.url:
-                    st.markdown(f'<meta http-equiv="refresh" content="0;url={res.url}">', unsafe_allow_html=True)
-            except Exception as e:
-                st.error(f"Erro na autenticação com Google: {e}")
+        try:
+            res = supabase.auth.sign_in_with_oauth({
+                "provider": "google",
+                "options": {
+                    "redirect_to": "https://mae-engine.streamlit.app",
+                    "queryParams": {"prompt": "select_account"}
+                }
+            })
+            if res.url:
+                st.link_button("🌐 Iniciar Sessão com o Google", res.url, use_container_width=True)
+        except Exception as e:
+            st.error(f"Erro ao ligar ao Google: {e}")
 
         st.markdown("<div style='text-align: center; color: #64748b; margin: 10px 0;'>— ou usa o teu e-mail —</div>", unsafe_allow_html=True)
 
@@ -60,21 +57,18 @@ def render_login_component():
                     st.error(f"Erro ao iniciar sessão: {e}")
 
     with tab_signup:
-        if st.button("🌐 Criar Conta com o Google", use_container_width=True, key="btn_google_signup"):
-            try:
-                res = supabase.auth.sign_in_with_oauth({
-                    "provider": "google",
-                    "options": {
-                        "redirect_to": "https://mae-engine.streamlit.app",
-                        "queryParams": {
-                            "prompt": "select_account"
-                        }
-                    }
-                })
-                if res.url:
-                    st.markdown(f'<meta http-equiv="refresh" content="0;url={res.url}">', unsafe_allow_html=True)
-            except Exception as e:
-                st.error(f"Erro no registo com Google: {e}")
+        try:
+            res = supabase.auth.sign_in_with_oauth({
+                "provider": "google",
+                "options": {
+                    "redirect_to": "https://mae-engine.streamlit.app",
+                    "queryParams": {"prompt": "select_account"}
+                }
+            })
+            if res.url:
+                st.link_button("🌐 Criar Conta com o Google", res.url, use_container_width=True, key="btn_google_signup")
+        except Exception as e:
+            st.error(f"Erro ao ligar ao Google: {e}")
 
         st.markdown("<div style='text-align: center; color: #64748b; margin: 10px 0;'>— ou regista-te com e-mail —</div>", unsafe_allow_html=True)
 
