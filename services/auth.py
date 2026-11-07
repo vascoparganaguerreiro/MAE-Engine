@@ -15,6 +15,26 @@ def render_login_component():
     if "user" not in st.session_state:
         st.session_state["user"] = None
 
+    # Trata o retorno do Google OAuth (code no URL)
+    query_params = st.query_params
+    if "code" in query_params and st.session_state["user"] is None:
+        auth_code = query_params["code"]
+        try:
+            res = supabase.auth.exchange_code_for_session({"auth_code": auth_code})
+            st.session_state["user"] = res.user
+            st.query_params.clear()
+            st.rerun()
+        except Exception as e:
+            # Se a sessão já tiver sido trocada, tenta obter o utilizador atual
+            try:
+                user_res = supabase.auth.get_user()
+                if user_res and user_res.user:
+                    st.session_state["user"] = user_res.user
+                    st.query_params.clear()
+                    st.rerun()
+            except Exception:
+                pass
+
     if st.session_state["user"] is not None:
         user = st.session_state["user"]
         col1, col2 = st.columns([4, 1])
