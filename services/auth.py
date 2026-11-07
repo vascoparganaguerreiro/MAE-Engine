@@ -1,9 +1,9 @@
+import os
 import streamlit as st
 from supabase import create_client, Client
-import os
 
 SUPABASE_URL = "https://quoafwluowkhjqqncnki.supabase.co"
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY") or st.secrets.get("SUPABASE_KEY", "sb_publishable_iPdQzsveyw5dMQBdnwV_AA_KwVu0...")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY") or st.secrets.get("SUPABASE_KEY", "")
 
 @st.cache_resource
 def get_supabase_client() -> Client:
@@ -28,6 +28,19 @@ def render_login_component():
     tab_login, tab_signup = st.tabs(["🔐 Iniciar Sessão", "📝 Criar Conta APEX"])
     
     with tab_login:
+        if st.button("🌐 Iniciar Sessão com o Google", use_container_width=True):
+            try:
+                res = supabase.auth.sign_in_with_oauth({
+                    "provider": "google",
+                    "options": {"redirect_to": "https://mae-engine.streamlit.app"}
+                })
+                if res.url:
+                    st.markdown(f'<meta http-equiv="refresh" content="0;url={res.url}">', unsafe_allow_html=True)
+            except Exception as e:
+                st.error(f"Erro na autenticação com Google: {e}")
+
+        st.markdown("<div style='text-align: center; color: #64748b; margin: 10px 0;'>— ou usa o teu e-mail —</div>", unsafe_allow_html=True)
+
         with st.form("form_login"):
             email = st.text_input("E-mail")
             password = st.text_input("Palavra-passe", type="password")
@@ -42,6 +55,19 @@ def render_login_component():
                     st.error(f"Erro ao iniciar sessão: {e}")
 
     with tab_signup:
+        if st.button("🌐 Criar Conta com o Google", use_container_width=True, key="btn_google_signup"):
+            try:
+                res = supabase.auth.sign_in_with_oauth({
+                    "provider": "google",
+                    "options": {"redirect_to": "https://mae-engine.streamlit.app"}
+                })
+                if res.url:
+                    st.markdown(f'<meta http-equiv="refresh" content="0;url={res.url}">', unsafe_allow_html=True)
+            except Exception as e:
+                st.error(f"Erro no registo com Google: {e}")
+
+        st.markdown("<div style='text-align: center; color: #64748b; margin: 10px 0;'>— ou regista-te com e-mail —</div>", unsafe_allow_html=True)
+
         with st.form("form_signup"):
             new_email = st.text_input("E-mail para nova conta")
             new_password = st.text_input("Escolhe uma palavra-passe", type="password")
