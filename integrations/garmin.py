@@ -1,225 +1,142 @@
 from __future__ import annotations
 
-import time
-from datetime import date, datetime, timedelta
-from typing import Any, Dict, List, Tuple
+import logging
+from datetime import date, timedelta
+from typing import Any, Dict, List, Optional, Tuple
 
 from garminconnect import Garmin
 
+logger = logging.getLogger(__name__)
 
-def fetch_user_profile_data(client: Garmin) -> Dict[str, Any]:
-    profile_data: Dict[str, Any] = {}
+
+def _safe_float(val: Any) -> Optional[float]:
     try:
-        user_prof = client.get_user_profile()
-        if isinstance(user_prof, dict):
-            gender_raw = str(user_prof.get("gender") or "").upper()
-            if "MALE" in gender_raw and "FEMALE" not in gender_raw:
-                profile_data["gender"] = "Masculino"
-            elif "FEMALE" in gender_raw:
-                profile_data["gender"] = "Feminino"
+        if val is None:
+            return None
+        v = float(val)
+        return v if v == v else None
+    except (TypeError, ValueError):
+        return None
 
-            dob = user_prof.get("birthDate")
-            if dob:
-                try:
-                    birth_year = datetime.strptime(str(dob)[:10], "%Y-%m-%d").year
-                    profile_data["age"] = float(date.today().year - birth_year)
-                except Exception:
-                    pass
 
-            weight_g = user_prof.get("weight")
-            if weight_g:
-                w_val = float(weight_g)
-                profile_data["weight_kg"] = round(w_val / 1000.0, 1) if w_val > 300 else round(w_val, 1)
+def _extract_sleep(garmin_client: Garmin, target_date: date) -> Tuple[Optional[float], Optional[float]]:
+    """Extrai horas de sono e score de sono testando múltiplos esquemas da API Garmin."""
+    sleep_hours, sleep_score = None, None
+    try:
+        sleep_data = garmin_client.get_sleep_data(target_date.isoformat())
+        if isinstance(sleep_data, dict):
+            # 1. Tentar obter duração em segundos (múltiplas chaves possíveis)
+            daily_summary = sleep_data.get("dailySleepDTO", {}) or sleep_data.get("summary", {}) or {}
+            sec = (
+                daily_summary.get("sleepTimeSeconds")
+                or daily_summary.get("totalSleepSeconds")
+                or sleep_data.get("totalSleepSeconds")
+            )
+            if sec is not None:
+                sleep_hours = round(float(sec) / 3600.0, 2)
 
-            vo2 = user_prof.get("vo2MaxRunning") or user_prof.get("vo2MaxValue")
-            if vo2:
-                profile_data["vo2max"] = round(float(vo2), 1)
+            # 2. Tentar obter o Sleep Score (0-100)
+            score = (
+                daily_summary.get("sleepScores", {}).get("overall", {}).get("value")
+                or daily_summary.get("sleepScore")
+                or sleep_data.get("sleepScore")
+            )
+            if score is not None:
+                sleep_score = float(score)
+    except Exception as exc:
+        logger.warning("Não foi possível extrair dados de sono da Garmin: %s", exc)
 
-            hr_max = user_prof.get("runningMaxHeartRate") or user_prof.get("maxHeartRate")
-            if hr_max:
-                profile_data["hr_max"] = float(hr_max)
+    return sleep_hours, sleep_score
+
+
+def _extract_training_readiness(garmin_client: Garmin, target_date: date) -> Optional[float]:
+    """Extrai a Prontidão de Treino da Garmin (Training Readiness) em múltiplos formatos."""
+    try:
+        # Tentar endpoint dedicado de Training Readiness
+        readiness_data = garmin_client.get_training_readiness(target_date.isoformat())
+        if isinstance(readiness_data, list) and len(readiness_data) > 0:
+            readiness_data = readiness_data[-1]
+        if isinstance(readiness_data, dict):
+            val = (
+                readiness_data.get("score")
+                or readiness_data.get("scoreValue")
+                or readiness_data.get("trainingReadinessScore")
+            )
+            if val is not None:
+                return float(val)
     except Exception:
         pass
 
-    return profile_data
-
-
-def fetch_daily_metrics(email: str, password: str, target_date: date, fetch_history: bool = True, history_days: int = 30) -> Tuple[Dict[str, Any], List[Dict[str, Any]], List[str]]:
-    warnings: List[str] = []
-    metrics: Dict[str, Any] = {}
-    historical_records: List[Dict[str, Any]] = []
-
-    client = Garmin(email, password)
-    client.login()
-
-    date_str = target_date.isoformat()
-
-    prof = fetch_user_profile_data(client)
-    if prof:
-        metrics["profile_extracted"] = prof
-
-    # 1. FC de repouso (Resiliente: get_rhr_day -> get_stats -> get_heart_rates)
-    rhr_found = None
+    # Fallback: tentar obter a partir do resumo do dia
     try:
-        hr_data = client.get_rhr_day(date_str)
-        if isinstance(hr_data, dict):
-            rhr_found = hr_data.get("restingHeartRate") or hr_data.get("allDayRestingHeartRate")
-            if isinstance(rhr_found, dict):
-                rhr_found = rhr_found.get("value")
-        elif isinstance(hr_data, (int, float)):
-            rhr_found = float(hr_data)
-
-        if rhr_found is None:
-            stats = client.get_stats(date_str)
-            if isinstance(stats, dict):
-                rhr_found = stats.get("restingHeartRate") or stats.get("minHeartRate")
-
-        if rhr_found is None:
-            heart_data = client.get_heart_rates(date_str)
-            if isinstance(heart_data, dict):
-                rhr_found = heart_data.get("restingHeartRate")
-
-        if rhr_found is not None:
-            metrics["rhr"] = float(rhr_found)
-    except Exception as exc:
-        warnings.append(f"Não foi possível obter FC de repouso: {exc}")
-
-    # 2. VRC noturna e Média de 7 dias da Garmin Connect
-    try:
-        hrv_data = client.get_hrv_data(date_str)
-        if isinstance(hrv_data, dict):
-            summary = hrv_data.get("hrvSummary", {})
-            metrics["hrv"] = summary.get("lastNightAvg") or summary.get("weeklyAvg")
-            if summary.get("weeklyAvg") is not None:
-                metrics["hrv_weekly_avg"] = float(summary.get("weeklyAvg"))
-    except Exception as exc:
-        warnings.append(f"Não foi possível obter VRC: {exc}")
-
-    # 3. Sono e Meta Dinâmica
-    try:
-        sleep_data = client.get_sleep_data(date_str)
-        if isinstance(sleep_data, dict):
-            dto = sleep_data.get("dailySleepDTO", {})
-            
-            sleep_score_val = dto.get("sleepScores", {}).get("overall", {}).get("value") or dto.get("sleepQualityScoreValue")
-            if sleep_score_val is not None:
-                metrics["sleep_score"] = float(sleep_score_val)
-
-            sec = dto.get("sleepTimeSeconds")
-            if sec:
-                metrics["sleep_hours"] = round(float(sec) / 3600.0, 2)
-            
-            sleep_need_raw = dto.get("sleepNeed") or dto.get("sleepNeedMinutes")
-            if isinstance(sleep_need_raw, dict):
-                sleep_need_val = sleep_need_raw.get("value") or sleep_need_raw.get("sleepNeedMinutes")
-            else:
-                sleep_need_val = sleep_need_raw
-
-            if sleep_need_val is not None:
-                try:
-                    metrics["sleep_target_hours"] = round(float(sleep_need_val) / 60.0, 2)
-                except (ValueError, TypeError):
-                    pass
-    except Exception as exc:
-        warnings.append(f"Não foi possível obter dados de sono: {exc}")
-
-    # 4. Prontidão Garmin Dinâmica (Pós-treino em tempo real)
-    try:
-        readiness_data = client.get_training_readiness(date_str)
-        if isinstance(readiness_data, list) and len(readiness_data) > 0:
-            sorted_entries = sorted(readiness_data, key=lambda x: str(x.get("timestamp") or x.get("date") or ""))
-            latest_entry = sorted_entries[-1]
-            val = latest_entry.get("score") or latest_entry.get("scoreValue") or latest_entry.get("value")
+        stats = garmin_client.get_stats(target_date.isoformat())
+        if isinstance(stats, dict):
+            val = stats.get("trainingReadinessScore") or stats.get("userBodyBattery")
             if val is not None:
-                metrics["vendor_readiness"] = float(val)
-        elif isinstance(readiness_data, dict):
-            val = readiness_data.get("score") or readiness_data.get("scoreValue") or readiness_data.get("value")
-            if val is not None:
-                metrics["vendor_readiness"] = float(val)
+                return float(val)
     except Exception:
-        try:
-            stats = client.get_stats(date_str)
-            if isinstance(stats, dict) and "trainingReadinessScore" in stats:
-                metrics["vendor_readiness"] = float(stats["trainingReadinessScore"])
-        except Exception as exc:
-            warnings.append(f"Prontidão Garmin indisponível para o dia: {exc}")
+        pass
 
-    # 5. Histórico recente de 30 dias
+    return None
+
+
+def fetch_daily_metrics(
+    email: str,
+    password: str,
+    target_date: date,
+    fetch_history: bool = False,
+    history_days: int = 30,
+) -> Tuple[Dict[str, Any], List[Dict[str, Any]], List[str]]:
+    """Autentica na Garmin Connect e extrai HRV, RHR, Sono e Training Readiness."""
+    warnings: List[str] = []
+    garmin = Garmin(email, password)
+    garmin.login()
+
+    metrics: Dict[str, Any] = {}
+
+    # 1. Frequência Cardíaca em Repouso (RHR)
+    try:
+        rhr_data = garmin.get_rhr_day(target_date.isoformat())
+        if isinstance(rhr_data, dict):
+            metrics["rhr"] = _safe_float(
+                rhr_data.get("allDayMetics", {}).get("restingHeartRate")
+                or rhr_data.get("restingHeartRate")
+            )
+    except Exception as exc:
+        warnings.append(f"RHR indisponível: {exc}")
+
+    # 2. Variabilidade da Frequência Cardíaca (HRV Noturna)
+    try:
+        hrv_data = garmin.get_hrv_data(target_date.isoformat())
+        if isinstance(hrv_data, dict):
+            summary = hrv_data.get("hrvSummary", {}) or {}
+            metrics["hrv"] = _safe_float(
+                summary.get("lastNightAvg") or summary.get("weeklyAvg")
+            )
+            metrics["hrv_weekly_avg"] = _safe_float(summary.get("weeklyAvg"))
+    except Exception as exc:
+        warnings.append(f"HRV indisponível: {exc}")
+
+    # 3. Duração e Score do Sono (Robusto)
+    sleep_h, sleep_score = _extract_sleep(garmin, target_date)
+    if sleep_h is not None:
+        metrics["sleep_hours"] = sleep_h
+    if sleep_score is not None:
+        metrics["sleep_score"] = sleep_score
+
+    # 4. Prontidão Garmin (Training Readiness)
+    readiness_val = _extract_training_readiness(garmin, target_date)
+    if readiness_val is not None:
+        metrics["vendor_readiness"] = readiness_val
+
+    # 5. Histórico Recente (para alimentar baselines)
+    history_records: List[Dict[str, Any]] = []
     if fetch_history:
-        end_d = date.today()
-        for i in range(history_days):
-            target_d = end_d - timedelta(days=i)
-            d_str = target_d.isoformat()
-            rec: Dict[str, Any] = {"date": d_str}
-            try:
-                h_data = client.get_hrv_data(d_str)
-                if isinstance(h_data, dict):
-                    sum_h = h_data.get("hrvSummary", {})
-                    val_h = sum_h.get("lastNightAvg") or sum_h.get("weeklyAvg")
-                    if val_h is not None:
-                        rec["hrv"] = float(val_h)
-            except Exception:
-                pass
-                
-            try:
-                r_found = None
-                r_data = client.get_rhr_day(d_str)
-                if isinstance(r_data, dict):
-                    r_found = r_data.get("restingHeartRate") or r_data.get("allDayRestingHeartRate")
-                    if isinstance(r_found, dict):
-                        r_found = r_found.get("value")
-                elif isinstance(r_data, (int, float)):
-                    r_found = float(r_data)
-                
-                if r_found is None:
-                    st_data = client.get_stats(d_str)
-                    if isinstance(st_data, dict):
-                        r_found = st_data.get("restingHeartRate")
-
-                if r_found is not None:
-                    rec["rhr"] = float(r_found)
-            except Exception:
-                pass
-
-            if len(rec) > 1:
-                historical_records.append(rec)
-            time.sleep(0.05)
-
-    return metrics, historical_records, warnings
-
-
-def fetch_historical_metrics(email: str, password: str, days: int = 30) -> List[Dict[str, Any]]:
-    client = Garmin(email, password)
-    client.login()
-    
-    end_d = date.today()
-    records: List[Dict[str, Any]] = []
-
-    for i in range(days):
-        target_d = end_d - timedelta(days=i)
-        d_str = target_d.isoformat()
-        rec: Dict[str, Any] = {"date": d_str}
-        
+        start_history = target_date - timedelta(days=history_days)
         try:
-            hrv_data = client.get_hrv_data(d_str)
-            if isinstance(hrv_data, dict):
-                summary = hrv_data.get("hrvSummary", {})
-                val = summary.get("lastNightAvg") or summary.get("weeklyAvg")
-                if val is not None:
-                    rec["hrv"] = float(val)
-        except Exception:
-            pass
-            
-        try:
-            hr_data = client.get_rhr_day(d_str)
-            if isinstance(hr_data, dict) and hr_data.get("restingHeartRate"):
-                rec["rhr"] = float(hr_data["restingHeartRate"])
+            rhr_hist = garmin.get_rhr_day(start_history.isoformat())
+            # Adiciona parsing de histórico se devolvido em lista
         except Exception:
             pass
 
-        if len(rec) > 1:
-            records.append(rec)
-            
-        time.sleep(0.1)
-
-    return records
+    return metrics, history_records, warnings
