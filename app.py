@@ -13,7 +13,7 @@ import services.auth as auth
 from integrations.garmin import fetch_daily_metrics as fetch_garmin_metrics
 from ui.today import render_today_page
 
-# Configuração Global Streamlit — Single Page Executive Layout
+# Configuração Global Streamlit — Executive Obsidian Layout
 st.set_page_config(
     page_title="APEX ENGINE | Executive Physiology & Performance",
     page_icon="⚡",
@@ -33,25 +33,41 @@ if user is None:
 st.markdown(
     """
     <style>
-      @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,700;1,400&family=Inter:wght@300;400;500;600;700&display=swap');
+      @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700&display=swap');
 
-      /* Reset & Global Canvas */
+      /* Canvas & Reset Global */
       html, body, .stApp {
           background-color: #05070a !important;
           color: #f1f5f9 !important;
-          font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
-          letter-spacing: -0.01em;
+          font-family: 'Inter', -apple-system, sans-serif !important;
       }
 
       [data-testid="stHeader"] {
-          background: rgba(5, 7, 10, 0.75) !important;
+          background: rgba(5, 7, 10, 0.85) !important;
           backdrop-filter: blur(12px) !important;
           border-bottom: 1px solid rgba(255, 255, 255, 0.05);
       }
 
       [data-testid="stSidebar"] { display: none !important; }
 
-      /* Frosted Glass Container Base */
+      /* Estilização dos Separadores Nativos (Tabs) */
+      button[data-baseweb="tab"] {
+          background: transparent !important;
+          color: #64748b !important;
+          font-family: 'JetBrains Mono', monospace !important;
+          font-size: 0.82rem !important;
+          font-weight: 500 !important;
+          padding: 10px 16px !important;
+          border-bottom: 2px solid transparent !important;
+      }
+      button[data-baseweb="tab"][aria-selected="true"] {
+          color: #38bdf8 !important;
+          border-bottom-color: #38bdf8 !important;
+          background: rgba(56, 189, 248, 0.05) !important;
+          border-radius: 6px 6px 0 0 !important;
+      }
+
+      /* Cards em Vidro Fosco (Frosted Glass) */
       .apex-card {
           background: rgba(15, 23, 42, 0.55);
           backdrop-filter: blur(16px);
@@ -61,13 +77,8 @@ st.markdown(
           padding: 20px;
           box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
           margin-bottom: 16px;
-          transition: transform 0.2s ease, border-color 0.2s ease;
-      }
-      .apex-card:hover {
-          border-color: rgba(255, 255, 255, 0.18);
       }
 
-      /* Monospace Metrics Styling */
       .mono-val {
           font-family: 'JetBrains Mono', monospace !important;
           font-weight: 700;
@@ -79,30 +90,20 @@ st.markdown(
           color: #94a3b8;
       }
 
-      /* Buttons & Custom Controls */
+      /* Botões */
       .stButton > button {
           background: rgba(255, 255, 255, 0.05) !important;
           color: #f8fafc !important;
           border: 1px solid rgba(255, 255, 255, 0.12) !important;
           border-radius: 8px !important;
           font-family: 'JetBrains Mono', monospace !important;
-          font-size: 0.8rem !important;
+          font-size: 0.78rem !important;
           text-transform: uppercase !important;
-          letter-spacing: 0.05em !important;
           transition: all 0.2s ease !important;
       }
       .stButton > button:hover {
           background: rgba(255, 255, 255, 0.12) !important;
           border-color: rgba(255, 255, 255, 0.3) !important;
-          box-shadow: 0 0 15px rgba(255, 255, 255, 0.1);
-      }
-
-      /* Native Selectboxes & Inputs Override */
-      div[data-baseweb="select"] > div {
-          background-color: rgba(15, 23, 42, 0.7) !important;
-          border-color: rgba(255, 255, 255, 0.1) !important;
-          color: #f8fafc !important;
-          border-radius: 8px !important;
       }
 
       .muted { color: #64748b; font-size: 0.82rem; }
@@ -130,7 +131,7 @@ def _run_garmin_sync() -> bool:
     email = str(get_secret("GARMIN_EMAIL", "") or st.session_state.get("garmin_email_input", "")).strip()
     password = str(get_secret("GARMIN_PASSWORD", "") or st.session_state.get("garmin_password_input", ""))
     if not email or not password:
-        return _result(False, "Insere as credenciais da Garmin nas definições.")
+        return _result(False, "Insere as credenciais da Garmin nas definições (botão Perfil).")
 
     try:
         metrics, history_recs, warnings = fetch_garmin_metrics(email, password, date.today(), fetch_history=True, history_days=30)
@@ -230,7 +231,7 @@ hrv_context = core.get_hrv_context(hrv_curr, hrv_mean, base_hrv.sd if base_hrv e
 effective_target = sleep_target_curr if sleep_target_curr is not None else 8.0
 diff_minutes = (effective_target - sleep_hours_curr) * 60.0 if sleep_hours_curr is not None else None
 
-# Renderizar Cockpit Executivo
+# Renderizar Dashboard Executivo
 render_today_page(
     base_df=base_df, hrv_mean=hrv_mean, rhr_mean=rhr_mean,
     hrv_curr=hrv_curr, rhr_curr=rhr_curr, sleep_curr=sleep_curr,
