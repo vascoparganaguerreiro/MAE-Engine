@@ -32,7 +32,12 @@ def render_login_component():
             try:
                 res = supabase.auth.sign_in_with_oauth({
                     "provider": "google",
-                    "options": {"redirect_to": "https://mae-engine.streamlit.app"}
+                    "options": {
+                        "redirect_to": "https://mae-engine.streamlit.app",
+                        "queryParams": {
+                            "prompt": "select_account"
+                        }
+                    }
                 })
                 if res.url:
                     st.markdown(f'<meta http-equiv="refresh" content="0;url={res.url}">', unsafe_allow_html=True)
@@ -59,7 +64,12 @@ def render_login_component():
             try:
                 res = supabase.auth.sign_in_with_oauth({
                     "provider": "google",
-                    "options": {"redirect_to": "https://mae-engine.streamlit.app"}
+                    "options": {
+                        "redirect_to": "https://mae-engine.streamlit.app",
+                        "queryParams": {
+                            "prompt": "select_account"
+                        }
+                    }
                 })
                 if res.url:
                     st.markdown(f'<meta http-equiv="refresh" content="0;url={res.url}">', unsafe_allow_html=True)
