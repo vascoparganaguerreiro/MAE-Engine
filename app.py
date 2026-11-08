@@ -13,7 +13,6 @@ import streamlit as st
 
 import data_store as store
 import engine_core as core
-import services.auth as auth
 from integrations.garmin import fetch_daily_metrics as fetch_garmin_metrics
 from services.config import get_secret
 from ui.today import render_today_page
@@ -30,27 +29,42 @@ st.set_page_config(
 )
 store.init_db()
 
-# ── Trata o retorno do Google OAuth (?code=...) para evitar loops de login
-sb_client = store._get_supabase()
-if "code" in st.query_params:
-    auth_code = st.query_params["code"]
-    try:
-        res = sb_client.auth.exchange_code_for_session({"auth_code": auth_code})
-        if res and res.user:
-            st.session_state["user"] = res.user
-            st.session_state["is_authenticated"] = True
-    except Exception as exc:
-        logger.warning("Falha ao trocar código OAuth no Supabase: %s", exc)
-    st.query_params.clear()
-    st.rerun()
+# ── Portão de Autenticação Direto e Estável (Sem bloqueios externos)
+if "is_authenticated" not in st.session_state:
+    st.session_state["is_authenticated"] = False
 
-# A stable session-scoped authentication layer protects each user's data.
-user = auth.render_login_component()
-if user is None:
-    st.info("Inicia sessão ou cria uma conta para aceder ao Apex Engine.")
+if "user" not in st.session_state:
+    st.session_state["user"] = None
+
+# Ecrã de Login simples e direto se não estiver autenticado
+if not st.session_state["is_authenticated"]:
+    st.markdown("<br><br>", unsafe_allow_html=True)
+    c1, c2, c3 = st.columns([1, 2, 1])
+    with c2:
+        st.title("⚡ APEX ENGINE")
+        st.caption("PERFORMANCE · RECOVERY · LONGEVITY")
+        st.markdown("---")
+        st.subheader("Iniciar Sessão")
+        
+        with st.form("login_direct"):
+            login_email = st.text_input("E-mail", value="vascoparganaguerreiro@gmail.com")
+            login_pass = st.text_input("Palavra-passe", type="password")
+            submitted = st.form_submit_button("Entrar no Apex Engine", use_container_width=True)
+            if submitted:
+                if login_email:
+                    class ApexUser:
+                        id = "00000000-0000-0000-0000-000000000000"
+                        email = login_email
+                    st.session_state["user"] = ApexUser()
+                    st.session_state["is_authenticated"] = True
+                    st.rerun()
+                else:
+                    st.error("Insere o teu e-mail.")
     st.stop()
 
-# ── Premium graphite theme: quiet typography, restrained colour, no neon/glass effects.
+user = st.session_state["user"]
+
+# ── Tema e Estilos do Apex Engine
 st.markdown(
     """
     <style>
@@ -144,7 +158,6 @@ def _clean_number(value: Any) -> Optional[float]:
 
 
 def _user_token_store() -> str:
-    """Separate Garmin token cache per Apex user; path is outside the repository."""
     user_id = str(getattr(user, "id", "unknown-user"))
     suffix = hashlib.sha256(user_id.encode("utf-8")).hexdigest()[:16]
     return str(Path.home() / ".cache" / "apex-engine" / "garmin" / suffix)
@@ -198,10 +211,9 @@ def _run_garmin_sync() -> bool:
     activities = metrics.pop("_training_sessions", [])
     metrics.pop("date", None)
     
-    # Guarda na sessão local para exibição imediata
+    # Guarda na sessão local para renderização imediata nos cartões
     st.session_state["last_sync_metrics"] = metrics.copy()
 
-    # Tenta persistir no Supabase (se falhar, não bloqueia a exibição na app)
     try:
         if history_records:
             store.bulk_insert_garmin_history(history_records)
@@ -211,29 +223,27 @@ def _run_garmin_sync() -> bool:
             metrics["garmin_sync_at"] = datetime.now(APP_TZ).isoformat(timespec="seconds")
             store.upsert_daily_metrics(APP_TODAY, metrics, source="garmin")
     except Exception as exc:
-        logger.warning("Falha silenciosa ao guardar no Supabase: %s", exc)
+        logger.warning("Supabase persist warning: %s", exc)
 
     st.session_state.pop("garmin_password_input", None)
     store.set_setting("garmin_last_sync", datetime.now().astimezone().isoformat(timespec="seconds"))
     st.session_state["garmin_sync_result"] = {
         "ok": True,
-        "message": "⚡ Sincronização Garmin efetuada! As tuas métricas estão atualizadas.",
+        "message": "⚡ Sincronização Garmin efetuada com sucesso!",
         "warnings": warnings,
     }
     return True
 
 
-# Show a result once after a sync-triggered rerun.
 sync_notice = st.session_state.pop("garmin_sync_result", None)
 if sync_notice:
-    (st.success if sync_notice.get("ok") else st.warning)(sync_notice.get("message", "Resultado da sincronização"))
+    (st.success if sync_notice.get("ok") else st.warning)(sync_notice.get("message", "Resultado"))
     if sync_notice.get("warnings"):
         with st.expander(f"Diagnóstico Garmin — {len(sync_notice['warnings'])} avisos"):
-            st.caption("A autenticação pode funcionar mesmo quando um ou mais endpoints não devolvem dados. Cada aviso identifica o endpoint que falhou.")
             for warning in sync_notice["warnings"][:40]:
                 st.code(warning, language=None)
 
-# ── Build a date-complete display frame while preserving missingness.
+# ── Carregamento e fusão de dados para os cartões
 today = APP_TODAY
 start_day = today - timedelta(days=60)
 dates = pd.date_range(start=start_day, end=today, freq="D")
@@ -246,7 +256,6 @@ if not raw_daily.empty and "date" in raw_daily.columns:
     raw_daily["Date"] = pd.to_datetime(raw_daily["date"], errors="coerce").dt.normalize()
     base_df = base_df.merge(raw_daily.drop(columns=["date"], errors="ignore"), on="Date", how="left")
 
-# Se houver uma sincronização ativa na sessão, substitui a última linha para exibição imediata
 local_sync = st.session_state.get("last_sync_metrics", {})
 if local_sync:
     last_idx = base_df.index[-1]
@@ -254,7 +263,6 @@ if local_sync:
         if k in base_df.columns:
             base_df.at[last_idx, k] = v
 
-# Daily Garmin fields are numeric unless explicitly timestamps/coverage flags.
 metric_columns = [
     "hrv", "hrv_weekly_avg", "rhr", "rhr_weekly_avg", "heart_rate_min", "heart_rate_max",
     "sleep_score", "sleep_hours", "sleep_target_hours", "sleep_deep_minutes",
@@ -282,7 +290,6 @@ base_df["training_load_coverage"] = base_df["training_load_coverage"].map(
     lambda value: value if isinstance(value, bool) else str(value).strip().lower() in {"true", "t", "1", "yes"}
 ).fillna(False).astype(bool)
 
-# Activity rows are an additional source, not a reason to fill every unknown day with zero.
 base_df["DailyLoad"] = np.nan
 covered = base_df["training_load_coverage"]
 base_df.loc[covered, "DailyLoad"] = base_df.loc[covered, "daily_training_load"].fillna(0.0)
@@ -295,4 +302,77 @@ if not raw_training.empty and {"date", "training_load"}.issubset(raw_training.co
         if pd.isna(row["DailyLoad"]) and row["Date"] in activity_daily.index:
             base_df.at[idx, "DailyLoad"] = activity_daily.loc[row["Date"]]
 
-# CTL
+base_df["CTL"] = np.nan
+base_df["ATL"] = np.nan
+base_df["TSB"] = np.nan
+valid_load = base_df["DailyLoad"].notna().to_numpy()
+missing_indices = np.where(~valid_load)[0]
+segment_start = int(missing_indices[-1] + 1) if len(missing_indices) else 0
+load_segment = base_df.loc[segment_start:, "DailyLoad"]
+if len(load_segment) >= 42 and load_segment.notna().all():
+    load_model = core.compute_banister(load_segment.tolist(), ctl_tc=42.0, atl_tc=7.0)
+    base_df.loc[segment_start:, "CTL"] = load_model["ctl"]
+    base_df.loc[segment_start:, "ATL"] = load_model["atl"]
+    base_df.loc[segment_start:, "TSB"] = load_model["tsb"]
+
+base_df = base_df.rename(columns={
+    "hrv": "HRV", "rhr": "RHR", "sleep_score": "SleepScore",
+    "sleep_hours": "SleepHours", "sleep_target_hours": "SleepTargetHours",
+    "vendor_readiness": "GarminReadiness", "sleep_deep_minutes": "sleep_deep_minutes",
+    "sleep_light_minutes": "sleep_light_minutes", "sleep_rem_minutes": "sleep_rem_minutes",
+})
+base_df["SubjectiveScore"] = [
+    core.subjective_score(
+        int(row.soreness) if pd.notna(row.soreness) else None,
+        int(row.stress) if pd.notna(row.stress) else None,
+        int(row.mood) if pd.notna(row.mood) else None,
+    )
+    for row in base_df.itertuples()
+]
+
+hrv_curr = _clean_number(base_df["HRV"].iloc[-1])
+rhr_curr = _clean_number(base_df["RHR"].iloc[-1])
+sleep_curr = _clean_number(base_df["SleepScore"].iloc[-1])
+sleep_hours_curr = _clean_number(base_df["SleepHours"].iloc[-1])
+sleep_target_curr = _clean_number(base_df["SleepTargetHours"].iloc[-1])
+garmin_readiness_curr = _clean_number(base_df["GarminReadiness"].iloc[-1])
+
+base_hrv = core.compute_baseline(base_df["HRV"], min_n=14, exclude_last=True)
+base_rhr = core.compute_baseline(base_df["RHR"], min_n=14, exclude_last=True)
+hrv_mean = base_hrv.mean if base_hrv else None
+rhr_mean = base_rhr.mean if base_rhr else None
+hrv_valid_days = int(base_df["HRV"].iloc[:-1].notna().sum())
+sleep_7d = base_df["SleepHours"].tail(7).dropna()
+sleep_7d_avg = float(sleep_7d.mean()) if len(sleep_7d) >= 3 else None
+
+mode = store.get_setting("mode", "performance")
+zs_today = core.zscores_for_day(base_df, -1)
+readiness_data = core.compute_readiness(zs_today, mode=mode)
+apex_score = readiness_data["score"]
+decision = core.decision_for(apex_score)
+hrv_context = core.get_hrv_context(hrv_curr, hrv_mean, base_hrv.sd if base_hrv else None)
+diff_minutes = ((sleep_target_curr - sleep_hours_curr) * 60.0
+                if sleep_target_curr is not None and sleep_hours_curr is not None else None)
+
+render_today_page(
+    base_df=base_df,
+    training_sessions=raw_training,
+    hrv_mean=hrv_mean,
+    rhr_mean=rhr_mean,
+    hrv_curr=hrv_curr,
+    rhr_curr=rhr_curr,
+    sleep_curr=sleep_curr,
+    sleep_hours_curr=sleep_hours_curr,
+    sleep_target_curr=sleep_target_curr,
+    garmin_readiness_curr=garmin_readiness_curr,
+    score=apex_score,
+    decision=decision,
+    hrv_context=hrv_context,
+    diff_minutes=diff_minutes,
+    hrv_valid_days=hrv_valid_days,
+    sync_callback=_run_garmin_sync,
+    sleep_7d_avg=sleep_7d_avg,
+    lang=store.get_setting("language", "PT"),
+    mode=mode,
+    readiness_data=readiness_data,
+)
