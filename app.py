@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from typing import Any, Dict, Optional
 
 import pandas as pd
@@ -16,7 +16,7 @@ from data_store import (
 )
 from integrations.garmin import fetch_daily_metrics as garmin_fetch
 
-# Tenta carregar as páginas de UI originais
+# Importação das UIs
 try:
     from ui.today import render_today_page
 except ImportError:
@@ -52,7 +52,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# Estilização CSS personalizada para o tema escuro original
+# Estilização Escura
 st.markdown(
     """
     <style>
@@ -75,46 +75,21 @@ st.markdown(
 )
 
 # -----------------------------------------------------------------------------
-# Autenticação & Sessão de Utilizador (Supabase & Google Auth)
+# Gestão de Sessão & Autenticação
 # -----------------------------------------------------------------------------
-def init_user_session() -> Optional[Any]:
-    """Gere a autenticação com Google / Email no Supabase com fallback pessoal."""
-    if "user" in st.session_state and st.session_state["user"] is not None:
-        return st.session_state["user"]
+if "is_authenticated" not in st.session_state:
+    st.session_state["is_authenticated"] = False
 
-    sb_client = _get_supabase()
-    
-    # Tenta obter sessão do Supabase se existir
-    try:
-        session = sb_client.auth.get_session()
-        if session and session.user:
-            st.session_state["user"] = session.user
-            return session.user
-    except Exception:
-        pass
+if "user" not in st.session_state:
+    st.session_state["user"] = None
 
-    # Utilizador pré-definido para ambiente pessoal
-    class DefaultApexUser:
-        id = "00000000-0000-0000-0000-000000000000"
-        email = "vascoparganaguerreiro@gmail.com"
-        access_token = "apex_personal_session"
-
-    user = DefaultApexUser()
-    st.session_state["user"] = user
-    return user
-
-user = init_user_session()
-
-# Estado de dados na sessão
 if "daily_metrics" not in st.session_state:
     st.session_state["daily_metrics"] = {}
 
-# -----------------------------------------------------------------------------
-# Função de Sincronização Garmin
-# -----------------------------------------------------------------------------
-def sync_garmin_now(email: str, passw: str) -> None:
+
+def sync_garmin_now(email: str, passw: str) -> bool:
     target_date = date.today()
-    with st.spinner("A sincronizar dados do Garmin Connect..."):
+    with st.spinner("A autenticar na Garmin e a sincronizar dados..."):
         metrics, history, warnings = garmin_fetch(
             email=email,
             password=passw,
@@ -122,80 +97,118 @@ def sync_garmin_now(email: str, passw: str) -> None:
             fetch_history=True,
             history_days=14,
         )
-        
+
         if metrics and any(k != "date" for k in metrics if not k.startswith("_")):
             st.session_state["daily_metrics"] = metrics
             st.session_state["last_sync_time"] = datetime.now().strftime("%H:%M:%S")
-            
+
             try:
                 upsert_daily_metrics(target_date, metrics)
             except Exception as exc:
                 logger.warning("Erro ao guardar no Supabase: %s", exc)
-            st.success("⚡ Dados Garmin sincronizados e guardados com sucesso!")
-            st.rerun()
-        else:
-            st.warning("⚠️ Ligação estabelecida, mas a Garmin não devolveu métricas novas para hoje.")
+            return True
+        return False
+
 
 # -----------------------------------------------------------------------------
-# Barra Superior & Login Header
+# ECRÃ DE LOGIN (Portão de Entrada Estrito)
 # -----------------------------------------------------------------------------
-col_logo, col_auth = st.columns([3, 1])
+if not st.session_state["is_authenticated"]:
+    st.markdown("<br><br>", unsafe_allow_html=True)
+    col1, col2, col3 = st.columns([1, 2, 1])
 
-with col_logo:
+    with col2:
+        st.title("⚡ APEX ENGINE")
+        st.caption("PERFORMANCE · RECOVERY · LONGEVITY")
+        st.markdown("---")
+
+        st.subheader("Entrar no APEX Engine")
+
+        with st.form("login_form"):
+            garmin_email = st.text_input("E-mail Garmin", value="vascoparganaguerreiro@gmail.com")
+            garmin_pass = st.text_input("Palavra-passe Garmin", type="password")
+            submit = st.form_submit_button("⚡ Entrar & Sincronizar", use_container_width=True)
+
+            if submit:
+                if garmin_email and garmin_pass:
+                    success = sync_garmin_now(garmin_email, garmin_pass)
+                    if success:
+                        class ApexUser:
+                            id = "00000000-0000-0000-0000-000000000000"
+                            email = garmin_email
+
+                        st.session_state["user"] = ApexUser()
+                        st.session_state["is_authenticated"] = True
+                        st.success("Sessão iniciada com sucesso!")
+                        st.rerun()
+                    else:
+                        st.error("Falha ao autenticar na Garmin. Verifica as tuas credenciais.")
+                else:
+                    st.error("Por favor preenche o e-mail e palavra-passe.")
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.caption("Opções alternativas de Login:")
+
+        # Link de Autorização para Google OAuth
+        try:
+            sb = _get_supabase()
+            res = sb.auth.sign_in_with_oauth({
+                "provider": "google",
+                "options": {"redirect_to": "https://mae-engine.streamlit.app"}
+            })
+            oauth_url = getattr(res, "url", None)
+            if oauth_url:
+                st.link_button("🔑 Entrar com Conta Google", oauth_url, use_container_width=True)
+        except Exception:
+            pass
+
+    st.stop()  # Impede a apresentação de qualquer elemento do dashboard se não houver login
+
+# -----------------------------------------------------------------------------
+# DASHBOARD APEX (Apenas visível APÓS autenticação efetuada)
+# -----------------------------------------------------------------------------
+user = st.session_state.get("user")
+user_email = getattr(user, "email", "vascoparganaguerreiro@gmail.com")
+sync_time = st.session_state.get("last_sync_time", "Hoje")
+
+col_title, col_user = st.columns([3, 1])
+
+with col_title:
     st.title("⚡ APEX ENGINE")
     st.caption("PERFORMANCE · RECOVERY · LONGEVITY")
 
-with col_auth:
-    user_email = getattr(user, "email", "vascoparganaguerreiro@gmail.com")
-    sync_time = st.session_state.get("last_sync_time", "Hoje")
+with col_user:
     st.markdown(
         f"<div style='text-align: right; color: #888; font-size: 0.85rem; margin-top: 10px;'>"
-        f"Sessão Ativa: <b>{user_email}</b><br>"
+        f"Utilizador: <b>{user_email}</b><br>"
         f"Última Sync: <b>{sync_time}</b>"
         f"</div>",
         unsafe_allow_html=True,
     )
+    if st.button("🚪 Terminar Sessão", use_container_width=True):
+        st.session_state["is_authenticated"] = False
+        st.session_state["user"] = None
+        st.session_state["daily_metrics"] = {}
+        st.rerun()
 
-# -----------------------------------------------------------------------------
-# Painel de Ligação Garmin & Autenticação
-# -----------------------------------------------------------------------------
-with st.expander("⚙️ Perfil, idioma e ligação Garmin", expanded=not bool(st.session_state.get("daily_metrics"))):
+# Painel para re-sincronizar se necessário
+with st.expander("⚙️ Definições & Re-sincronizar Garmin"):
     c1, c2, c3 = st.columns([2, 2, 1])
     with c1:
-        email = st.text_input("Garmin email", value="vascoparganaguerreiro@gmail.com")
+        re_email = st.text_input("E-mail Garmin", value=user_email, key="re_email")
     with c2:
-        passw = st.text_input("Garmin password", type="password")
+        re_pass = st.text_input("Palavra-passe Garmin", type="password", key="re_pass")
     with c3:
         st.write("##")
-        if st.button("↻ Sync Garmin", use_container_width=True):
-            if email and passw:
-                sync_garmin_now(email, passw)
-            else:
-                st.error("Por favor insere a palavra-passe da Garmin.")
+        if st.button("↻ Re-Sync", use_container_width=True):
+            if re_email and re_pass:
+                if sync_garmin_now(re_email, re_pass):
+                    st.success("Re-sincronizado!")
+                    st.rerun()
+                else:
+                    st.error("Erro na re-sincronização.")
 
-    st.divider()
-    st.caption("Autenticação APEX / Supabase Cloud")
-    c_auth1, c_auth2 = st.columns(2)
-    with c_auth1:
-        if st.button("🔑 Entrar com Google OAuth", use_container_width=True):
-            try:
-                sb = _get_supabase()
-                res = sb.auth.sign_in_with_oauth({"provider": "google"})
-                st.info("Redirecionando para login Google...")
-            except Exception as e:
-                st.error(f"Erro ao iniciar login Google: {e}")
-    with c_auth2:
-        if st.button("🚪 Terminar Sessão", use_container_width=True):
-            try:
-                _get_supabase().auth.sign_out()
-                st.session_state.pop("user", None)
-                st.rerun()
-            except Exception:
-                pass
-
-# -----------------------------------------------------------------------------
-# Navegação por Separadores (UI Original)
-# -----------------------------------------------------------------------------
+# Separadores da Dashboard
 tabs = st.tabs([
     "00 · Hoje",
     "01 · Recuperação",
@@ -206,9 +219,7 @@ tabs = st.tabs([
 
 m = st.session_state.get("daily_metrics", {})
 
-# -----------------------------------------------------------------------------
 # Separador 00 · Hoje
-# -----------------------------------------------------------------------------
 with tabs[0]:
     hrv_mean = m.get("hrv_weekly_avg")
     rhr_mean = m.get("rhr_weekly_avg")
@@ -241,7 +252,7 @@ with tabs[0]:
                 hrv_context,
                 diff_minutes,
                 hrv_valid_days,
-                lambda: sync_garmin_now(email, passw)
+                lambda: None
             )
             rendered_original = True
         except Exception as exc:
@@ -253,7 +264,7 @@ with tabs[0]:
 
         st.subheader("Cinco métricas principais")
         c1, c2, c3, c4, c5 = st.columns(5)
-        
+
         hrv_delta = f"{round(hrv_curr - hrv_mean, 1)} ms" if hrv_curr and hrv_mean else None
         c1.metric("VRC Noturna", f"{hrv_curr or '--'} ms", delta=hrv_delta)
         c2.metric("FC Repouso", f"{rhr_curr or '--'} bpm")
@@ -269,9 +280,7 @@ with tabs[0]:
         c4.metric("SpO₂ Médio", f"{m.get('spo2_avg', '--')}%")
         c5.metric("VO₂ Max Corrida", f"{m.get('vo2max_running', '--')}")
 
-# -----------------------------------------------------------------------------
 # Separador 01 · Recuperação
-# -----------------------------------------------------------------------------
 with tabs[1]:
     if render_recovery_tab is not None:
         try:
@@ -285,9 +294,7 @@ with tabs[1]:
         r2.metric("REM", f"{m.get('sleep_rem_minutes', '--')} min")
         r3.metric("Acordado", f"{m.get('sleep_awake_minutes', '--')} min")
 
-# -----------------------------------------------------------------------------
 # Separador 02 · Performance
-# -----------------------------------------------------------------------------
 with tabs[2]:
     if render_performance_tab is not None:
         try:
@@ -301,9 +308,7 @@ with tabs[2]:
         p2.metric("VO₂ Max (Ciclismo)", f"{m.get('vo2max_cycling', '--')}")
         p3.metric("FTP (Watts)", f"{m.get('ftp_w', '--')} W")
 
-# -----------------------------------------------------------------------------
 # Separador 03 · Força & Movimento
-# -----------------------------------------------------------------------------
 with tabs[3]:
     if render_strength_tab is not None:
         try:
@@ -314,9 +319,7 @@ with tabs[3]:
         st.subheader("Treino de Força & Biomecânica")
         st.info("Registo de sessões de musculação e hipertrofia.")
 
-# -----------------------------------------------------------------------------
-# Separador 04 · Insights & Nutrição (APEX AI)
-# -----------------------------------------------------------------------------
+# Separador 04 · Insights & Nutrição
 with tabs[4]:
     if render_insights_tab is not None:
         try:
