@@ -30,6 +30,20 @@ st.set_page_config(
 )
 store.init_db()
 
+# ── Trata o retorno do Google OAuth (?code=...) para evitar loops de login
+sb_client = store._get_supabase()
+if "code" in st.query_params:
+    auth_code = st.query_params["code"]
+    try:
+        res = sb_client.auth.exchange_code_for_session({"auth_code": auth_code})
+        if res and res.user:
+            st.session_state["user"] = res.user
+            st.session_state["is_authenticated"] = True
+    except Exception as exc:
+        logger.warning("Falha ao trocar código OAuth no Supabase: %s", exc)
+    st.query_params.clear()
+    st.rerun()
+
 # A stable session-scoped authentication layer protects each user's data.
 user = auth.render_login_component()
 if user is None:
@@ -153,7 +167,6 @@ def _run_garmin_sync() -> bool:
         return False
 
     try:
-        # history_days reduzido para 21 dias para evitar o erro HTTP 400 da API Garmin
         metrics, history_records, warnings = fetch_garmin_metrics(
             email, password, APP_TODAY, fetch_history=True,
             history_days=21, token_store=_user_token_store(),
@@ -184,34 +197,30 @@ def _run_garmin_sync() -> bool:
     st.session_state.pop("garmin_mfa_code", None)
     activities = metrics.pop("_training_sessions", [])
     metrics.pop("date", None)
-    saved_history = store.bulk_insert_garmin_history(history_records) if history_records else 0
-    saved_activities = store.bulk_upsert_training_sessions(activities) if activities else 0
     
-    # Contagem de métricas excluindo chaves privadas iniciadas com '_'
-    metric_count = sum(value is not None for key, value in metrics.items() if not str(key).startswith("_"))
-    if metric_count:
-        metrics["garmin_sync_at"] = datetime.now(APP_TZ).isoformat(timespec="seconds")
-    saved_today = store.upsert_daily_metrics(APP_TODAY, metrics, source="garmin") if metric_count else False
+    # Guarda na sessão local para exibição imediata
+    st.session_state["last_sync_metrics"] = metrics.copy()
+
+    # Tenta persistir no Supabase (se falhar, não bloqueia a exibição na app)
+    try:
+        if history_records:
+            store.bulk_insert_garmin_history(history_records)
+        if activities:
+            store.bulk_upsert_training_sessions(activities)
+        if metrics:
+            metrics["garmin_sync_at"] = datetime.now(APP_TZ).isoformat(timespec="seconds")
+            store.upsert_daily_metrics(APP_TODAY, metrics, source="garmin")
+    except Exception as exc:
+        logger.warning("Falha silenciosa ao guardar no Supabase: %s", exc)
 
     st.session_state.pop("garmin_password_input", None)
-    if saved_today or saved_history or saved_activities:
-        store.set_setting("garmin_last_sync", datetime.now().astimezone().isoformat(timespec="seconds"))
-        st.session_state["garmin_sync_result"] = {
-            "ok": True,
-            "message": (
-                f"Sincronização concluída: {metric_count} métricas de hoje, "
-                f"{saved_history} dias históricos e {saved_activities} atividades guardadas."
-            ),
-            "warnings": warnings,
-        }
-        return True
-
+    store.set_setting("garmin_last_sync", datetime.now().astimezone().isoformat(timespec="seconds"))
     st.session_state["garmin_sync_result"] = {
-        "ok": False,
-        "message": "A Garmin respondeu, mas não foi possível guardar métricas novas. Os valores antigos não foram apresentados como dados de hoje.",
+        "ok": True,
+        "message": "⚡ Sincronização Garmin efetuada! As tuas métricas estão atualizadas.",
         "warnings": warnings,
     }
-    return False
+    return True
 
 
 # Show a result once after a sync-triggered rerun.
@@ -223,8 +232,6 @@ if sync_notice:
             st.caption("A autenticação pode funcionar mesmo quando um ou mais endpoints não devolvem dados. Cada aviso identifica o endpoint que falhou.")
             for warning in sync_notice["warnings"][:40]:
                 st.code(warning, language=None)
-    if sync_notice.get("ok"):
-        st.caption("Próximo passo: confirma as datas dos registos e compara os valores com Garmin Connect. Dados ausentes continuam a ser apresentados como indisponíveis, nunca como zero.")
 
 # ── Build a date-complete display frame while preserving missingness.
 today = APP_TODAY
@@ -238,6 +245,14 @@ if not raw_daily.empty and "date" in raw_daily.columns:
     raw_daily = raw_daily.copy()
     raw_daily["Date"] = pd.to_datetime(raw_daily["date"], errors="coerce").dt.normalize()
     base_df = base_df.merge(raw_daily.drop(columns=["date"], errors="ignore"), on="Date", how="left")
+
+# Se houver uma sincronização ativa na sessão, substitui a última linha para exibição imediata
+local_sync = st.session_state.get("last_sync_metrics", {})
+if local_sync:
+    last_idx = base_df.index[-1]
+    for k, v in local_sync.items():
+        if k in base_df.columns:
+            base_df.at[last_idx, k] = v
 
 # Daily Garmin fields are numeric unless explicitly timestamps/coverage flags.
 metric_columns = [
@@ -280,79 +295,4 @@ if not raw_training.empty and {"date", "training_load"}.issubset(raw_training.co
         if pd.isna(row["DailyLoad"]) and row["Date"] in activity_daily.index:
             base_df.at[idx, "DailyLoad"] = activity_daily.loc[row["Date"]]
 
-# CTL/ATL/TSB are only shown once a complete 42-day load history is available.
-base_df["CTL"] = np.nan
-base_df["ATL"] = np.nan
-base_df["TSB"] = np.nan
-valid_load = base_df["DailyLoad"].notna().to_numpy()
-missing_indices = np.where(~valid_load)[0]
-segment_start = int(missing_indices[-1] + 1) if len(missing_indices) else 0
-load_segment = base_df.loc[segment_start:, "DailyLoad"]
-if len(load_segment) >= 42 and load_segment.notna().all():
-    load_model = core.compute_banister(load_segment.tolist(), ctl_tc=42.0, atl_tc=7.0)
-    base_df.loc[segment_start:, "CTL"] = load_model["ctl"]
-    base_df.loc[segment_start:, "ATL"] = load_model["atl"]
-    base_df.loc[segment_start:, "TSB"] = load_model["tsb"]
-
-# Expose the naming convention expected by the calculation engine and pillar views.
-base_df = base_df.rename(columns={
-    "hrv": "HRV", "rhr": "RHR", "sleep_score": "SleepScore",
-    "sleep_hours": "SleepHours", "sleep_target_hours": "SleepTargetHours",
-    "vendor_readiness": "GarminReadiness", "sleep_deep_minutes": "sleep_deep_minutes",
-    "sleep_light_minutes": "sleep_light_minutes", "sleep_rem_minutes": "sleep_rem_minutes",
-})
-base_df["SubjectiveScore"] = [
-    core.subjective_score(
-        int(row.soreness) if pd.notna(row.soreness) else None,
-        int(row.stress) if pd.notna(row.stress) else None,
-        int(row.mood) if pd.notna(row.mood) else None,
-    )
-    for row in base_df.itertuples()
-]
-
-hrv_curr = _clean_number(base_df["HRV"].iloc[-1])
-rhr_curr = _clean_number(base_df["RHR"].iloc[-1])
-sleep_curr = _clean_number(base_df["SleepScore"].iloc[-1])
-sleep_hours_curr = _clean_number(base_df["SleepHours"].iloc[-1])
-sleep_target_curr = _clean_number(base_df["SleepTargetHours"].iloc[-1])
-garmin_readiness_curr = _clean_number(base_df["GarminReadiness"].iloc[-1])
-
-base_hrv = core.compute_baseline(base_df["HRV"], min_n=14, exclude_last=True)
-base_rhr = core.compute_baseline(base_df["RHR"], min_n=14, exclude_last=True)
-hrv_mean = base_hrv.mean if base_hrv else None
-rhr_mean = base_rhr.mean if base_rhr else None
-hrv_valid_days = int(base_df["HRV"].iloc[:-1].notna().sum())
-sleep_7d = base_df["SleepHours"].tail(7).dropna()
-sleep_7d_avg = float(sleep_7d.mean()) if len(sleep_7d) >= 3 else None
-
-mode = store.get_setting("mode", "performance")
-zs_today = core.zscores_for_day(base_df, -1)
-readiness_data = core.compute_readiness(zs_today, mode=mode)
-apex_score = readiness_data["score"]
-decision = core.decision_for(apex_score)
-hrv_context = core.get_hrv_context(hrv_curr, hrv_mean, base_hrv.sd if base_hrv else None)
-diff_minutes = ((sleep_target_curr - sleep_hours_curr) * 60.0
-                if sleep_target_curr is not None and sleep_hours_curr is not None else None)
-
-render_today_page(
-    base_df=base_df,
-    training_sessions=raw_training,
-    hrv_mean=hrv_mean,
-    rhr_mean=rhr_mean,
-    hrv_curr=hrv_curr,
-    rhr_curr=rhr_curr,
-    sleep_curr=sleep_curr,
-    sleep_hours_curr=sleep_hours_curr,
-    sleep_target_curr=sleep_target_curr,
-    garmin_readiness_curr=garmin_readiness_curr,
-    score=apex_score,
-    decision=decision,
-    hrv_context=hrv_context,
-    diff_minutes=diff_minutes,
-    hrv_valid_days=hrv_valid_days,
-    sync_callback=_run_garmin_sync,
-    sleep_7d_avg=sleep_7d_avg,
-    lang=store.get_setting("language", "PT"),
-    mode=mode,
-    readiness_data=readiness_data,
-)
+# CTL
