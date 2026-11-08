@@ -12,7 +12,19 @@ from data_store import (
     upsert_daily_metrics,
 )
 from integrations.garmin import fetch_daily_metrics as garmin_fetch
-from ui.today import render_today_tab
+
+# Importação flexível do módulo de UI para evitar acidentes de ImportError
+render_today_tab = None
+try:
+    from ui.today import render_today_tab
+except ImportError:
+    try:
+        from ui.today import render_today as render_today_tab
+    except ImportError:
+        try:
+            from ui.today import render_today_page as render_today_tab
+        except ImportError:
+            pass
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("apex_engine")
@@ -24,7 +36,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# Inicializa o estado global da sessão
+# Utilizador base para testes pessoais
 if "user" not in st.session_state:
     class SingleUser:
         id = "00000000-0000-0000-0000-000000000000"
@@ -46,21 +58,24 @@ def sync_garmin_now(email: str, passw: str) -> None:
         )
         
         if metrics and any(k != "date" for k in metrics if not k.startswith("_")):
-            # 1. MOSTRA IMEDIATAMENTE NO ECRÃ (Como funcionava no início)
+            # 1. Atualiza logo o ecrã na memória local (como no início)
             st.session_state["daily_metrics"] = metrics
             st.session_state["last_sync_time"] = datetime.now().strftime("%H:%M:%S")
             st.success("⚡ Dados Garmin sincronizados com sucesso!")
             
-            # 2. Persiste em segundo plano no Supabase
-            upsert_daily_metrics(target_date, metrics)
+            # 2. Tenta guardar no Supabase em segundo plano
+            try:
+                upsert_daily_metrics(target_date, metrics)
+            except Exception as e:
+                logger.warning("Erro ao guardar no Supabase: %s", e)
         else:
-            st.warning("⚠️ Ligação estabelecida, mas nenhum dado novo foi retornado para a data de hoje.")
+            st.warning("⚠️ Ligação estabelecida, mas a Garmin não devolveu métricas novas para hoje.")
 
 # Cabeçalho Principal
 st.title("⚡ APEX ENGINE")
 st.caption("PERFORMANCE · RECOVERY · LONGEVITY")
 
-# Painel de Ligação Garmin
+# Painel Garmin
 with st.expander("⚙️ Perfil, idioma e ligação Garmin", expanded=not bool(st.session_state.get("daily_metrics"))):
     c1, c2 = st.columns(2)
     with c1:
@@ -72,8 +87,25 @@ with st.expander("⚙️ Perfil, idioma e ligação Garmin", expanded=not bool(s
         if email and passw:
             sync_garmin_now(email, passw)
         else:
-            st.error("Por favor insere o teu e-mail e palavra-passe do Garmin Connect.")
+            st.error("Por favor insere o e-mail e a palavra-passe da Garmin.")
 
-# Renderiza as métricas no ecrã
+# Exibição dos Dados
 current_metrics = st.session_state.get("daily_metrics", {})
-render_today_tab(current_metrics)
+
+if render_today_tab is not None:
+    try:
+        render_today_tab(current_metrics)
+    except Exception as exc:
+        st.warning(f"Aviso ao desenhar página original: {exc}")
+        st.json(current_metrics)
+else:
+    # Painel simples de recurso se o módulo ui.today falhar
+    st.subheader("Métricas Diárias")
+    if current_metrics:
+        cols = st.columns(4)
+        cols[0].metric("VRC Noturna (HRV)", f"{current_metrics.get('hrv', '--')} ms")
+        cols[1].metric("FC Repouso (RHR)", f"{current_metrics.get('rhr', '--')} bpm")
+        cols[2].metric("Horas de Sono", f"{current_metrics.get('sleep_hours', '--')} h")
+        cols[3].metric("Stress Médio", f"{current_metrics.get('stress_avg', '--')}")
+    else:
+        st.info("Insere as credenciais e clica em Sync Garmin para carregar os teus dados.")
