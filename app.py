@@ -1,364 +1,358 @@
-"""Main entrypoint for APEX Engine Streamlit dashboard."""
 from __future__ import annotations
 
+import hashlib
 import logging
-from datetime import date, datetime
-from typing import Any, Dict, Optional
+from datetime import date, datetime, timedelta
+from pathlib import Path
+from typing import Any, Optional
+from zoneinfo import ZoneInfo
 
+import numpy as np
 import pandas as pd
 import streamlit as st
 
-from data_store import (
-    _get_supabase,
-    fetch_daily_metrics as store_fetch_daily,
-    fetch_training_days as store_fetch_training,
-    upsert_daily_metrics,
-)
-from integrations.garmin import fetch_daily_metrics as garmin_fetch
+import data_store as store
+import engine_core as core
+import services.auth as auth
+from integrations.garmin import fetch_daily_metrics as fetch_garmin_metrics
+from services.config import get_secret
+from ui.today import render_today_page
 
-# Importação dos módulos de interface
-try:
-    from ui.today import render_today_page
-except ImportError:
-    render_today_page = None
-
-try:
-    from ui.recovery import render_recovery_tab
-except ImportError:
-    render_recovery_tab = None
-
-try:
-    from ui.performance import render_performance_tab
-except ImportError:
-    render_performance_tab = None
-
-try:
-    from ui.strength import render_strength_tab
-except ImportError:
-    render_strength_tab = None
-
-try:
-    from ui.insights import render_insights_tab
-except ImportError:
-    render_insights_tab = None
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("apex_engine")
+logger = logging.getLogger(__name__)
+APP_TZ = ZoneInfo("Europe/Prague")
+APP_TODAY = datetime.now(APP_TZ).date()
 
 st.set_page_config(
-    page_title="APEX ENGINE",
+    page_title="Apex Engine | Performance & Health",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
+store.init_db()
 
+# A stable session-scoped authentication layer protects each user's data.
+user = auth.render_login_component()
+if user is None:
+    st.info("Inicia sessão ou cria uma conta para aceder ao Apex Engine.")
+    st.stop()
+
+# ── Premium graphite theme: quiet typography, restrained colour, no neon/glass effects.
 st.markdown(
     """
     <style>
-    .main { background-color: #0e1117; }
-    div[data-testid="stMetricValue"] { font-size: 1.8rem !important; font-weight: 700; }
-    .stTabs [data-baseweb="tab-list"] { gap: 8px; }
-    .stTabs [data-baseweb="tab"] {
-        padding: 8px 16px;
-        border-radius: 4px;
-        background-color: #161b22;
-        color: #8b949e;
-    }
-    .stTabs [aria-selected="true"] {
-        background-color: #21262d !important;
-        color: #ffffff !important;
-    }
+      @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&display=swap');
+      :root {
+        --apex-bg: #151a1c;
+        --apex-panel: #202729;
+        --apex-panel-2: #293235;
+        --apex-border: #3b4846;
+        --apex-text: #edf0f2;
+        --apex-muted: #9aa5af;
+        --apex-accent: #a9b9a9;
+        --apex-gold: #c7b48e;
+      }
+      html, body, .stApp {
+        background: var(--apex-bg) !important;
+        color: var(--apex-text) !important;
+        font-family: 'DM Sans', sans-serif !important;
+      }
+      [data-testid="stHeader"] { background: rgba(16,20,25,.94) !important; }
+      [data-testid="stSidebar"] { display: none !important; }
+      .block-container { max-width: 1380px; padding-top: 2.2rem; padding-bottom: 3.5rem; }
+      h1, h2, h3, h4 { font-family: 'Manrope', sans-serif !important; letter-spacing: -.02em; color: #f1f2ef !important; }
+      h1 { font-weight: 800 !important; }
+      p, label, [data-testid="stMarkdownContainer"] { color: var(--apex-text); }
+      [data-testid="stCaptionContainer"], .stCaption { color: var(--apex-muted) !important; }
+      .apex-card {
+        background: var(--apex-panel) !important;
+        border: 1px solid var(--apex-border) !important;
+        border-radius: 14px !important;
+        padding: 18px 20px !important;
+        box-shadow: 0 3px 12px rgba(0,0,0,.10) !important;
+        margin-bottom: 14px;
+      }
+      .mono-val { font-family: 'Manrope', sans-serif !important; font-weight: 700; letter-spacing: -.025em; }
+      .mono-sub { font-family: 'DM Sans', sans-serif !important; font-size: .78rem; color: var(--apex-muted); }
+      button[data-baseweb="tab"] {
+        color: #aeb7bf !important; font-family: 'DM Sans', sans-serif !important;
+        font-size: .88rem !important; font-weight: 600 !important;
+        border-bottom: 2px solid transparent !important; padding: 13px 16px !important;
+      }
+      button[data-baseweb="tab"][aria-selected="true"] {
+        color: var(--apex-accent) !important; border-bottom-color: var(--apex-accent) !important;
+        background: rgba(155,185,173,.06) !important;
+      }
+      .stButton > button, .stLinkButton > a {
+        border-radius: 9px !important; border: 1px solid #3a4550 !important;
+        background: #202831 !important; color: #edf0f2 !important;
+        font-family: 'DM Sans', sans-serif !important; font-weight: 600 !important;
+        text-transform: none !important; transition: border-color .15s ease, background .15s ease;
+      }
+      .stButton > button:hover, .stLinkButton > a:hover {
+        background: #29343e !important; border-color: #71877f !important;
+      }
+      .stButton > button[kind="primary"],
+      [data-testid="stBaseButton-primary"] {
+        background: #a9b9a9 !important; color: #18201c !important;
+        border: 1px solid #c3d0c2 !important; font-weight: 700 !important;
+      }
+      .stButton > button[kind="primary"]:hover,
+      [data-testid="stBaseButton-primary"]:hover {
+        background: #bdcbbc !important; border-color: #d6dfd4 !important;
+      }
+      [data-testid="stMetric"] {
+        background: var(--apex-panel) !important; border: 1px solid var(--apex-border) !important;
+        border-radius: 12px !important; padding: 14px 16px !important;
+      }
+      [data-testid="stMetricLabel"] { color: var(--apex-muted) !important; }
+      [data-testid="stMetricValue"] { font-family: 'Manrope', sans-serif !important; }
+      [data-testid="stExpander"] { border: 1px solid var(--apex-border) !important; border-radius: 10px !important; }
+      div[data-baseweb="select"] > div, div[data-baseweb="input"] > div,
+      div[data-baseweb="textarea"] > div { background: #202831 !important; border-color: #3a4550 !important; }
+      hr { border-color: var(--apex-border) !important; }
+      .apex-eyebrow { color: var(--apex-gold); font-size: .72rem; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+      .apex-muted { color: var(--apex-muted); }
+      @media (max-width: 900px) {
+        .block-container { padding-left: 1rem; padding-right: 1rem; }
+      }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-# -----------------------------------------------------------------------------
-# 1. Processamento do Retorno OAuth (Google Login / Supabase Code Exchange)
-# -----------------------------------------------------------------------------
-sb_client = _get_supabase()
 
-# Verifica se o Google redirecionou de volta com ?code=...
-if "code" in st.query_params:
-    auth_code = st.query_params["code"]
+def _clean_number(value: Any) -> Optional[float]:
     try:
-        res = sb_client.auth.exchange_code_for_session({"auth_code": auth_code})
-        if res and res.user:
-            st.session_state["user"] = res.user
-            st.session_state["is_authenticated"] = True
-            st.query_params.clear()
-            st.rerun()
+        number = float(value)
+        return number if np.isfinite(number) else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _user_token_store() -> str:
+    """Separate Garmin token cache per Apex user; path is outside the repository."""
+    user_id = str(getattr(user, "id", "unknown-user"))
+    suffix = hashlib.sha256(user_id.encode("utf-8")).hexdigest()[:16]
+    return str(Path.home() / ".cache" / "apex-engine" / "garmin" / suffix)
+
+
+def _run_garmin_sync() -> bool:
+    email = str(get_secret("GARMIN_EMAIL", "") or st.session_state.get("garmin_email_input", "")).strip()
+    password = str(get_secret("GARMIN_PASSWORD", "") or st.session_state.get("garmin_password_input", ""))
+    mfa_state = st.session_state.get("garmin_mfa_client_state")
+    mfa_code = str(st.session_state.get("garmin_mfa_code", "")).strip()
+    if not mfa_state and (not email or not password):
+        st.session_state["garmin_sync_result"] = {
+            "ok": False, "message": "Adiciona as credenciais Garmin nas definições antes de sincronizar.", "warnings": []
+        }
+        return False
+    if mfa_state and not mfa_code:
+        st.session_state["garmin_sync_result"] = {
+            "ok": False, "message": "Introduz o código MFA enviado pela Garmin e volta a sincronizar.", "warnings": []
+        }
+        return False
+
+    try:
+        # history_days reduzido para 21 dias para evitar o erro HTTP 400 da API Garmin
+        metrics, history_records, warnings = fetch_garmin_metrics(
+            email, password, APP_TODAY, fetch_history=True,
+            history_days=21, token_store=_user_token_store(),
+            mfa_client_state=mfa_state, mfa_code=mfa_code or None,
+        )
     except Exception as exc:
-        logger.warning("Falha ao trocar código OAuth no Supabase: %s", exc)
+        logger.exception("Garmin sync failed")
+        st.session_state["garmin_sync_result"] = {
+            "ok": False,
+            "message": f"Não foi possível concluir a sincronização ({type(exc).__name__}): {str(exc)[:220]}",
+            "warnings": [],
+        }
+        st.session_state.pop("garmin_password_input", None)
+        st.session_state.pop("garmin_mfa_code", None)
+        return False
 
-# Verifica se existe sessão ativa persistida no Supabase
-if not st.session_state.get("is_authenticated"):
-    try:
-        session = sb_client.auth.get_session()
-        if session and session.user:
-            st.session_state["user"] = session.user
-            st.session_state["is_authenticated"] = True
-    except Exception:
-        pass
+    if metrics.pop("_mfa_required", False):
+        st.session_state["garmin_mfa_client_state"] = metrics.get("_mfa_client_state")
+        st.session_state.pop("garmin_password_input", None)
+        st.session_state["garmin_sync_result"] = {
+            "ok": False,
+            "message": "A Garmin exige verificação em dois passos. Introduz o código MFA nas definições Garmin e sincroniza novamente.",
+            "warnings": warnings,
+        }
+        return False
 
-if "daily_metrics" not in st.session_state:
-    st.session_state["daily_metrics"] = {}
+    st.session_state.pop("garmin_mfa_client_state", None)
+    st.session_state.pop("garmin_mfa_code", None)
+    activities = metrics.pop("_training_sessions", [])
+    metrics.pop("date", None)
+    saved_history = store.bulk_insert_garmin_history(history_records) if history_records else 0
+    saved_activities = store.bulk_upsert_training_sessions(activities) if activities else 0
+    
+    # Contagem de métricas excluindo chaves privadas iniciadas com '_'
+    metric_count = sum(value is not None for key, value in metrics.items() if not str(key).startswith("_"))
+    if metric_count:
+        metrics["garmin_sync_at"] = datetime.now(APP_TZ).isoformat(timespec="seconds")
+    saved_today = store.upsert_daily_metrics(APP_TODAY, metrics, source="garmin") if metric_count else False
 
-# -----------------------------------------------------------------------------
-# 2. Portão de Autenticação APEX (Login Principal)
-# -----------------------------------------------------------------------------
-if not st.session_state.get("is_authenticated"):
-    st.markdown("<br><br>", unsafe_allow_html=True)
-    col1, col2, col3 = st.columns([1, 2, 1])
+    st.session_state.pop("garmin_password_input", None)
+    if saved_today or saved_history or saved_activities:
+        store.set_setting("garmin_last_sync", datetime.now().astimezone().isoformat(timespec="seconds"))
+        st.session_state["garmin_sync_result"] = {
+            "ok": True,
+            "message": (
+                f"Sincronização concluída: {metric_count} métricas de hoje, "
+                f"{saved_history} dias históricos e {saved_activities} atividades guardadas."
+            ),
+            "warnings": warnings,
+        }
+        return True
 
-    with col2:
-        st.title("⚡ APEX ENGINE")
-        st.caption("PERFORMANCE · RECOVERY · LONGEVITY")
-        st.markdown("---")
-        st.subheader("Entrar na tua conta APEX")
+    st.session_state["garmin_sync_result"] = {
+        "ok": False,
+        "message": "A Garmin respondeu, mas não foi possível guardar métricas novas. Os valores antigos não foram apresentados como dados de hoje.",
+        "warnings": warnings,
+    }
+    return False
 
-        # Botão Principal: Google OAuth
-        try:
-            res = sb_client.auth.sign_in_with_oauth({
-                "provider": "google",
-                "options": {"redirect_to": "https://mae-engine.streamlit.app"}
-            })
-            oauth_url = getattr(res, "url", None)
-            if oauth_url:
-                st.link_button("🔑 Entrar com Conta Google", oauth_url, use_container_width=True)
-        except Exception as exc:
-            logger.warning("OAuth URL generator info: %s", exc)
 
-        st.markdown("<br>", unsafe_allow_html=True)
+# Show a result once after a sync-triggered rerun.
+sync_notice = st.session_state.pop("garmin_sync_result", None)
+if sync_notice:
+    (st.success if sync_notice.get("ok") else st.warning)(sync_notice.get("message", "Resultado da sincronização"))
+    if sync_notice.get("warnings"):
+        with st.expander(f"Diagnóstico Garmin — {len(sync_notice['warnings'])} avisos"):
+            st.caption("A autenticação pode funcionar mesmo quando um ou mais endpoints não devolvem dados. Cada aviso identifica o endpoint que falhou.")
+            for warning in sync_notice["warnings"][:40]:
+                st.code(warning, language=None)
+    if sync_notice.get("ok"):
+        st.caption("Próximo passo: confirma as datas dos registos e compara os valores com Garmin Connect. Dados ausentes continuam a ser apresentados como indisponíveis, nunca como zero.")
 
-        # Login por Email / Palavra-passe APEX
-        with st.form("apex_login_form"):
-            email_in = st.text_input("E-mail APEX", value="vascoparganaguerreiro@gmail.com")
-            pass_in = st.text_input("Palavra-passe APEX", type="password")
-            btn_login = st.form_submit_button("Entrar", use_container_width=True)
+# ── Build a date-complete display frame while preserving missingness.
+today = APP_TODAY
+start_day = today - timedelta(days=60)
+dates = pd.date_range(start=start_day, end=today, freq="D")
+base_df = pd.DataFrame({"Date": dates})
+raw_daily = store.fetch_daily_metrics(start_day, today)
+raw_training = store.fetch_training_days(start_day, today)
 
-            if btn_login:
-                try:
-                    res = sb_client.auth.sign_in_with_password({"email": email_in, "password": pass_in})
-                    if res and res.user:
-                        st.session_state["user"] = res.user
-                        st.session_state["is_authenticated"] = True
-                        st.success("Sessão iniciada!")
-                        st.rerun()
-                except Exception as exc:
-                    st.error(f"Erro ao entrar na conta APEX: {exc}")
+if not raw_daily.empty and "date" in raw_daily.columns:
+    raw_daily = raw_daily.copy()
+    raw_daily["Date"] = pd.to_datetime(raw_daily["date"], errors="coerce").dt.normalize()
+    base_df = base_df.merge(raw_daily.drop(columns=["date"], errors="ignore"), on="Date", how="left")
 
-        st.markdown("---")
-        # Modo Pessoal / Acesso Direto para desenvolvimento
-        if st.button("⚡ Acesso Pessoal Direto (Modo Rápido)", use_container_width=True):
-            class PersonalUser:
-                id = "00000000-0000-0000-0000-000000000000"
-                email = "vascoparganaguerreiro@gmail.com"
-            st.session_state["user"] = PersonalUser()
-            st.session_state["is_authenticated"] = True
-            st.rerun()
+# Daily Garmin fields are numeric unless explicitly timestamps/coverage flags.
+metric_columns = [
+    "hrv", "hrv_weekly_avg", "rhr", "rhr_weekly_avg", "heart_rate_min", "heart_rate_max",
+    "sleep_score", "sleep_hours", "sleep_target_hours", "sleep_deep_minutes",
+    "sleep_light_minutes", "sleep_rem_minutes", "sleep_awake_minutes",
+    "respiration_sleep_avg", "respiration_wake_avg", "spo2_avg", "spo2_min",
+    "stress_avg", "stress_max", "body_battery", "body_battery_low", "body_battery_high",
+    "body_battery_charged", "body_battery_drained", "steps", "steps_goal", "distance_m",
+    "floors_ascended", "intensity_minutes_moderate", "intensity_minutes_vigorous",
+    "active_calories", "resting_calories", "total_calories", "vendor_readiness",
+    "readiness_sleep_score", "readiness_hrv_score", "readiness_load_score",
+    "readiness_recovery_hours", "vo2max_running", "vo2max_cycling", "ftp_w",
+    "lactate_threshold_hr", "lactate_threshold_speed", "running_economy", "endurance_score",
+    "low_aerobic_load", "high_aerobic_load", "anaerobic_load", "acute_training_load",
+    "hydration_intake_ml", "hydration_goal_ml", "sweat_loss_ml", "daily_training_load",
+    "soreness", "stress", "mood", "fatigue", "motivation",
+]
+for column in metric_columns:
+    if column not in base_df.columns:
+        base_df[column] = np.nan
+    base_df[column] = pd.to_numeric(base_df[column], errors="coerce")
 
-    st.stop()
+if "training_load_coverage" not in base_df:
+    base_df["training_load_coverage"] = False
+base_df["training_load_coverage"] = base_df["training_load_coverage"].map(
+    lambda value: value if isinstance(value, bool) else str(value).strip().lower() in {"true", "t", "1", "yes"}
+).fillna(False).astype(bool)
 
-# -----------------------------------------------------------------------------
-# 3. Dashboard APEX (Utilizador Autenticado)
-# -----------------------------------------------------------------------------
-user = st.session_state.get("user")
-user_email = getattr(user, "email", "vascoparganaguerreiro@gmail.com")
+# Activity rows are an additional source, not a reason to fill every unknown day with zero.
+base_df["DailyLoad"] = np.nan
+covered = base_df["training_load_coverage"]
+base_df.loc[covered, "DailyLoad"] = base_df.loc[covered, "daily_training_load"].fillna(0.0)
+if not raw_training.empty and {"date", "training_load"}.issubset(raw_training.columns):
+    activity_copy = raw_training.copy()
+    activity_copy["Date"] = pd.to_datetime(activity_copy["date"], errors="coerce").dt.normalize()
+    activity_copy["training_load"] = pd.to_numeric(activity_copy["training_load"], errors="coerce")
+    activity_daily = activity_copy.groupby("Date")["training_load"].sum(min_count=1)
+    for idx, row in base_df.iterrows():
+        if pd.isna(row["DailyLoad"]) and row["Date"] in activity_daily.index:
+            base_df.at[idx, "DailyLoad"] = activity_daily.loc[row["Date"]]
 
-# Carrega métricas existentes do Supabase no arranque se a sessão estiver vazia
-if not st.session_state.get("daily_metrics"):
-    try:
-        df_today = store_fetch_daily(date.today(), date.today())
-        if not df_today.empty:
-            st.session_state["daily_metrics"] = df_today.iloc[0].to_dict()
-    except Exception as exc:
-        logger.warning("Falha ao carregar métricas prévias do Supabase: %s", exc)
+# CTL/ATL/TSB are only shown once a complete 42-day load history is available.
+base_df["CTL"] = np.nan
+base_df["ATL"] = np.nan
+base_df["TSB"] = np.nan
+valid_load = base_df["DailyLoad"].notna().to_numpy()
+missing_indices = np.where(~valid_load)[0]
+segment_start = int(missing_indices[-1] + 1) if len(missing_indices) else 0
+load_segment = base_df.loc[segment_start:, "DailyLoad"]
+if len(load_segment) >= 42 and load_segment.notna().all():
+    load_model = core.compute_banister(load_segment.tolist(), ctl_tc=42.0, atl_tc=7.0)
+    base_df.loc[segment_start:, "CTL"] = load_model["ctl"]
+    base_df.loc[segment_start:, "ATL"] = load_model["atl"]
+    base_df.loc[segment_start:, "TSB"] = load_model["tsb"]
 
-col_title, col_user = st.columns([3, 1])
-
-with col_title:
-    st.title("⚡ APEX ENGINE")
-    st.caption("PERFORMANCE · RECOVERY · LONGEVITY")
-
-with col_user:
-    st.markdown(
-        f"<div style='text-align: right; color: #888; font-size: 0.85rem; margin-top: 10px;'>"
-        f"Conta APEX: <b>{user_email}</b><br>"
-        f"Última Sync: <b>{st.session_state.get('last_sync_time', 'Base de Dados')}</b>"
-        f"</div>",
-        unsafe_allow_html=True,
+# Expose the naming convention expected by the calculation engine and pillar views.
+base_df = base_df.rename(columns={
+    "hrv": "HRV", "rhr": "RHR", "sleep_score": "SleepScore",
+    "sleep_hours": "SleepHours", "sleep_target_hours": "SleepTargetHours",
+    "vendor_readiness": "GarminReadiness", "sleep_deep_minutes": "sleep_deep_minutes",
+    "sleep_light_minutes": "sleep_light_minutes", "sleep_rem_minutes": "sleep_rem_minutes",
+})
+base_df["SubjectiveScore"] = [
+    core.subjective_score(
+        int(row.soreness) if pd.notna(row.soreness) else None,
+        int(row.stress) if pd.notna(row.stress) else None,
+        int(row.mood) if pd.notna(row.mood) else None,
     )
-    if st.button("🚪 Terminar Sessão", use_container_width=True):
-        try:
-            sb_client.auth.sign_out()
-        except Exception:
-            pass
-        st.session_state["is_authenticated"] = False
-        st.session_state["user"] = None
-        st.session_state["daily_metrics"] = {}
-        st.rerun()
+    for row in base_df.itertuples()
+]
 
-# -----------------------------------------------------------------------------
-# 4. Central de Conexões e Integrações (Garmin, Strava, etc.)
-# -----------------------------------------------------------------------------
-with st.expander("⚙️ Perfil & Conexões de Plataformas (Garmin / Strava / Oura)"):
-    st.subheader("Ligação Garmin Connect")
-    c1, c2, c3 = st.columns([2, 2, 1])
-    with c1:
-        g_email = st.text_input("E-mail Garmin", value=user_email, key="garmin_email_input")
-    with c2:
-        g_pass = st.text_input("Palavra-passe Garmin", type="password", key="garmin_pass_input")
-    with c3:
-        st.write("##")
-        if st.button("↻ Sincronizar Garmin", use_container_width=True):
-            if g_email and g_pass:
-                with st.spinner("A descarregar dados do Garmin Connect..."):
-                    metrics, history, warnings = garmin_fetch(
-                        email=g_email,
-                        password=g_pass,
-                        target_date=date.today(),
-                        fetch_history=True,
-                        history_days=14,
-                    )
-                    if metrics and any(k != "date" for k in metrics if not k.startswith("_")):
-                        st.session_state["daily_metrics"] = metrics
-                        st.session_state["last_sync_time"] = datetime.now().strftime("%H:%M:%S")
-                        upsert_daily_metrics(date.today(), metrics)
-                        st.success("⚡ Dados Garmin integrados na tua conta APEX!")
-                        st.rerun()
-                    else:
-                        st.error("Não foi possível obter dados da Garmin. Verifica os dados de acesso.")
-            else:
-                st.warning("Insere o email e palavra-passe da conta Garmin.")
+hrv_curr = _clean_number(base_df["HRV"].iloc[-1])
+rhr_curr = _clean_number(base_df["RHR"].iloc[-1])
+sleep_curr = _clean_number(base_df["SleepScore"].iloc[-1])
+sleep_hours_curr = _clean_number(base_df["SleepHours"].iloc[-1])
+sleep_target_curr = _clean_number(base_df["SleepTargetHours"].iloc[-1])
+garmin_readiness_curr = _clean_number(base_df["GarminReadiness"].iloc[-1])
 
-    st.divider()
-    st.subheader("Próximas Conexões")
-    c_str, c_our, c_wah = st.columns(3)
-    c_str.button("🟠 Strava (Em breve)", disabled=True, use_container_width=True)
-    c_our.button("💍 Oura Ring (Em breve)", disabled=True, use_container_width=True)
-    c_wah.button("🔵 Wahoo Fitness (Em breve)", disabled=True, use_container_width=True)
+base_hrv = core.compute_baseline(base_df["HRV"], min_n=14, exclude_last=True)
+base_rhr = core.compute_baseline(base_df["RHR"], min_n=14, exclude_last=True)
+hrv_mean = base_hrv.mean if base_hrv else None
+rhr_mean = base_rhr.mean if base_rhr else None
+hrv_valid_days = int(base_df["HRV"].iloc[:-1].notna().sum())
+sleep_7d = base_df["SleepHours"].tail(7).dropna()
+sleep_7d_avg = float(sleep_7d.mean()) if len(sleep_7d) >= 3 else None
 
-# -----------------------------------------------------------------------------
-# 5. Dashboard Principal por Separadores
-# -----------------------------------------------------------------------------
-tabs = st.tabs([
-    "00 · Hoje",
-    "01 · Recuperação",
-    "02 · Performance",
-    "03 · Força & Movimento",
-    "04 · Insights & Nutrição",
-])
+mode = store.get_setting("mode", "performance")
+zs_today = core.zscores_for_day(base_df, -1)
+readiness_data = core.compute_readiness(zs_today, mode=mode)
+apex_score = readiness_data["score"]
+decision = core.decision_for(apex_score)
+hrv_context = core.get_hrv_context(hrv_curr, hrv_mean, base_hrv.sd if base_hrv else None)
+diff_minutes = ((sleep_target_curr - sleep_hours_curr) * 60.0
+                if sleep_target_curr is not None and sleep_hours_curr is not None else None)
 
-m = st.session_state.get("daily_metrics", {})
-
-# Separador 00 · Hoje
-with tabs[0]:
-    hrv_mean = m.get("hrv_weekly_avg")
-    rhr_mean = m.get("rhr_weekly_avg")
-    hrv_curr = m.get("hrv")
-    rhr_curr = m.get("rhr")
-    sleep_curr = m.get("sleep_score")
-    sleep_hours_curr = m.get("sleep_hours")
-    sleep_target_curr = m.get("sleep_target_hours", 8.0)
-    garmin_readiness_curr = m.get("vendor_readiness")
-    score = m.get("vendor_readiness")
-    decision = "Prontidão calculada com base na VRC noturna e horas de sono."
-    hrv_context = "Linha de base fisiológica estável."
-    diff_minutes = 0
-    hrv_valid_days = 7 if hrv_curr else 0
-
-    rendered_original = False
-    if render_today_page is not None and m:
-        try:
-            render_today_page(
-                hrv_mean,
-                rhr_mean,
-                hrv_curr,
-                rhr_curr,
-                sleep_curr,
-                sleep_hours_curr,
-                sleep_target_curr,
-                garmin_readiness_curr,
-                score,
-                decision,
-                hrv_context,
-                diff_minutes,
-                hrv_valid_days,
-                lambda: None
-            )
-            rendered_original = True
-        except Exception as exc:
-            logger.warning("Renderização ui.today falhou: %s", exc)
-
-    if not rendered_original:
-        st.subheader("Decisão de hoje")
-        st.info(f"**APEX READINESS:** {m.get('vendor_readiness', '--')}/100 — {decision}")
-
-        st.subheader("Cinco métricas principais")
-        c1, c2, c3, c4, c5 = st.columns(5)
-
-        hrv_delta = f"{round(hrv_curr - hrv_mean, 1)} ms" if hrv_curr and hrv_mean else None
-        c1.metric("VRC Noturna", f"{hrv_curr or '--'} ms", delta=hrv_delta)
-        c2.metric("FC Repouso", f"{rhr_curr or '--'} bpm")
-        c3.metric("Duração do Sono", f"{sleep_hours_curr or '--'} h")
-        c4.metric("Carga Diária", f"{m.get('daily_training_load', 0.0)} net")
-        c5.metric("Prontidão Garmin", f"{garmin_readiness_curr or '--'}/100")
-
-        st.subheader("Outros Sinais Biométricos")
-        c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("Sleep Score", f"{m.get('sleep_score', '--')}/100")
-        c2.metric("Body Battery", f"{m.get('body_battery', '--')}")
-        c3.metric("Stress Médio", f"{m.get('stress_avg', '--')}")
-        c4.metric("SpO₂ Médio", f"{m.get('spo2_avg', '--')}%")
-        c5.metric("VO₂ Max Corrida", f"{m.get('vo2max_running', '--')}")
-
-# Separador 01 · Recuperação
-with tabs[1]:
-    if render_recovery_tab is not None:
-        try:
-            render_recovery_tab(m)
-        except Exception as exc:
-            st.warning(f"Erro ao renderizar Recuperação: {exc}")
-    else:
-        st.subheader("Métricas de Recuperação & Sono")
-        r1, r2, r3 = st.columns(3)
-        r1.metric("Fases do Sono", f"Profundo: {m.get('sleep_deep_minutes', '--')} min")
-        r2.metric("REM", f"{m.get('sleep_rem_minutes', '--')} min")
-        r3.metric("Acordado", f"{m.get('sleep_awake_minutes', '--')} min")
-
-# Separador 02 · Performance
-with tabs[2]:
-    if render_performance_tab is not None:
-        try:
-            render_performance_tab(m)
-        except Exception as exc:
-            st.warning(f"Erro ao renderizar Performance: {exc}")
-    else:
-        st.subheader("Carga e Capacidade Aeróbica")
-        p1, p2, p3 = st.columns(3)
-        p1.metric("VO₂ Max (Corrida)", f"{m.get('vo2max_running', '--')}")
-        p2.metric("VO₂ Max (Ciclismo)", f"{m.get('vo2max_cycling', '--')}")
-        p3.metric("FTP (Watts)", f"{m.get('ftp_w', '--')} W")
-
-# Separador 03 · Força & Movimento
-with tabs[3]:
-    if render_strength_tab is not None:
-        try:
-            render_strength_tab(m)
-        except Exception as exc:
-            st.warning(f"Erro ao renderizar Força: {exc}")
-    else:
-        st.subheader("Treino de Força & Biomecânica")
-        st.info("Registo de sessões de musculação e hipertrofia.")
-
-# Separador 04 · Insights & Nutrição
-with tabs[4]:
-    if render_insights_tab is not None:
-        try:
-            render_insights_tab(m)
-        except Exception as exc:
-            st.warning(f"Erro ao renderizar Insights: {exc}")
-    else:
-        st.subheader("APEX AI Coach")
-        st.write("Consulta nutricional e avaliação de treinos 1–100.")
+render_today_page(
+    base_df=base_df,
+    training_sessions=raw_training,
+    hrv_mean=hrv_mean,
+    rhr_mean=rhr_mean,
+    hrv_curr=hrv_curr,
+    rhr_curr=rhr_curr,
+    sleep_curr=sleep_curr,
+    sleep_hours_curr=sleep_hours_curr,
+    sleep_target_curr=sleep_target_curr,
+    garmin_readiness_curr=garmin_readiness_curr,
+    score=apex_score,
+    decision=decision,
+    hrv_context=hrv_context,
+    diff_minutes=diff_minutes,
+    hrv_valid_days=hrv_valid_days,
+    sync_callback=_run_garmin_sync,
+    sleep_7d_avg=sleep_7d_avg,
+    lang=store.get_setting("language", "PT"),
+    mode=mode,
+    readiness_data=readiness_data,
+)
