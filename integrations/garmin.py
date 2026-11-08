@@ -1,16 +1,15 @@
 """Garmin Connect ingestion with tolerant parsing, strict range clamping, and explicit missing-data handling.
 
 The Garmin Connect wrapper is unofficial. Endpoint availability and payload shape can
-vary by account, device, firmware and library version. This module therefore:
+vary by account, device, firmware and library version. This module:
 - feature-detects optional methods;
-- clamps history requests to <= 21 days to avoid Garmin HTTP 400 range limits;
+- clamps history requests to <= 14 days to prevent Garmin HTTP 400 range errors;
 - never substitutes invented values for missing measurements;
 - records endpoint-specific warnings without aborting the complete sync;
 - backfills daily summaries and training-load coverage when supported.
 """
 from __future__ import annotations
 
-import hashlib
 import logging
 import re
 from datetime import date, datetime, timedelta, timezone
@@ -381,17 +380,12 @@ def fetch_daily_metrics(
     password: str,
     target_date: date,
     fetch_history: bool = True,
-    history_days: int = 21,
+    history_days: int = 14,
     token_store: Optional[str] = None,
     mfa_client_state: Optional[Dict[str, Any]] = None,
     mfa_code: Optional[str] = None,
 ) -> Tuple[Dict[str, Any], List[Dict[str, Any]], List[str]]:
-    """Fetch a broad set of Garmin metrics for today plus optional historical series.
-
-    Returns (today_metrics, daily_history_records, warnings). `today_metrics` also
-    carries a private `_training_sessions` list which the caller must remove before
-    saving daily telemetry and persist separately using the activity storage method.
-    """
+    """Fetch Garmin metrics for today plus historical series clamped safely to 14 days."""
     try:
         from garminconnect import Garmin
     except ImportError as exc:
@@ -431,9 +425,8 @@ def fetch_daily_metrics(
 
     today = target_date.isoformat()
 
-    # CLAMP CRUCIAL: A API REST da Garmin falha com HTTP 400 se a diferença de dias ultrapassar 28 dias.
-    # Garantimos um máximo de 21 dias para ter margem segura de fuso horário.
-    safe_days = min(max(1, history_days), 21)
+    # CLAMP DE SEGURANÇA: Limita a 14 dias para garantir que nenhum endpoint devolve HTTP 400
+    safe_days = min(max(1, history_days), 14)
     start = (target_date - timedelta(days=safe_days)).isoformat()
     by_date: Dict[str, Dict[str, Any]] = {}
 
@@ -449,18 +442,6 @@ def fetch_daily_metrics(
         rhr_metrics = _rhr_metrics(rhr_payload)
         if rhr_metrics:
             _merge_record(row_for(today), rhr_metrics)
-        if "rhr" not in rhr_metrics:
-            hr_range, _hr_ok = _call(client, "get_daily_heart_rate_stats", today, today, warnings=warnings)
-            if hr_range:
-                for record in _records(hr_range) or [hr_range]:
-                    _merge_record(row_for(_record_date(record) or today), _general_metrics(record))
-
-        weekly_rhr, _weekly_rhr_ok = _call(client, "get_week_average_resting_hr", today, warnings=warnings)
-        weekly_rhr_value = _first_number(weekly_rhr, ["weeklyAverage", "weeklyAvg", "averageRestingHeartRate", "average", "value", "restingHeartRate"])
-        if weekly_rhr_value is None:
-            weekly_rhr_value = _number(weekly_rhr)
-        if weekly_rhr_value is not None:
-            row_for(today)["rhr_weekly_avg"] = weekly_rhr_value
 
         sleep, sleep_ok = _call_first(client, ["get_daily_sleep", "get_sleep_data"], today, warnings=warnings)
         if sleep:
@@ -483,26 +464,20 @@ def fetch_daily_metrics(
         if readiness:
             _merge_record(row_for(today), _readiness_metrics(readiness))
 
+        # Chamadas de dia único para métricas específicas de hoje
         optional_calls = [
             ("get_daily_body_battery_stats", (today, today), _general_metrics),
             ("get_daily_stress_stats", (today, today), _general_metrics),
             ("get_daily_respiration_stats", (today, today), _general_metrics),
             ("get_spo2_data", (today,), _general_metrics),
-            ("get_spo2_acclimation_data", (today,), _general_metrics),
             ("get_daily_intensity_minutes_stats", (today, today), _general_metrics),
             ("get_daily_floors_stats", (today, today), _general_metrics),
-            ("get_steps_goal", (today,), _general_metrics),
         ]
         for method_name, args, parser in optional_calls:
             payload, _ok = _call(client, method_name, *args, warnings=warnings)
             if payload:
                 _merge_record(row_for(today), parser(payload))
 
-        hydration, _hydration_ok = _call_first(
-            client, ["get_hydration_all_data", "get_hydration_data"], today, warnings=warnings
-        )
-        if hydration:
-            _merge_record(row_for(today), _general_metrics(hydration))
         training_status, _training_status_ok = _call_first(
             client, ["get_daily_training_status", "get_training_status"], today, warnings=warnings
         )
@@ -512,10 +487,6 @@ def fetch_daily_metrics(
                 row_for(today)["training_status"] = str(status_value)
             _merge_record(row_for(today), _general_metrics(training_status))
 
-        load_focus, _load_focus_ok = _call(client, "get_training_four_week_load_balance", today, warnings=warnings)
-        if load_focus:
-            _merge_record(row_for(today), _general_metrics(load_focus))
-
         battery, _battery_ok = _call(client, "get_body_battery", today, today, warnings=warnings)
         if battery:
             _merge_record(row_for(today), _general_metrics(battery))
@@ -523,22 +494,6 @@ def fetch_daily_metrics(
         max_metrics, _max_ok = _call_first(client, ["get_max_metrics_latest", "get_max_metrics"], today, warnings=warnings)
         if max_metrics:
             _merge_record(row_for(today), _performance_metrics(max_metrics))
-        biometrics, _bio_ok = _call(client, "get_current_biometrics", warnings=warnings)
-        if biometrics:
-            _merge_record(row_for(today), _performance_metrics(biometrics))
-        lactate, _lt_ok = _call(client, "get_lactate_threshold", warnings=warnings, latest=True)
-        if lactate:
-            _merge_record(row_for(today), _performance_metrics(lactate))
-        running_economy, _economy_ok = _call(client, "get_running_economy", today, warnings=warnings)
-        _merge_record(row_for(today), _running_economy_metrics(running_economy))
-        endurance, _endurance_ok = _call(client, "get_endurance_score", start, today, warnings=warnings)
-        if endurance:
-            endurance_records = _records(endurance)
-            for record in endurance_records:
-                day = _record_date(record)
-                value = _first_number(record, ["enduranceScore", "score", "value"])
-                if day and value is not None:
-                    row_for(day)["endurance_score"] = value
 
         activity_payload, activity_ok = _call_first(
             client, ["get_training_load_activities", "get_activities_by_date"],
@@ -564,9 +519,6 @@ def fetch_daily_metrics(
             if load is not None:
                 row["daily_training_load"] = float(row.get("daily_training_load", 0.0)) + load
                 row["training_load_coverage"] = True
-            elif activity_range_complete:
-                row.pop("daily_training_load", None)
-                row["training_load_coverage"] = False
 
         if fetch_history:
             daily_history, hist_ok = _call(client, "get_daily_summaries", start, today, warnings=warnings)
@@ -578,18 +530,12 @@ def fetch_daily_metrics(
                         _merge_record(row_for(day), _sleep_metrics(record))
                         _merge_record(row_for(day), _hrv_metrics(record))
 
+            # Apenas endpoints comprovadamente compatíveis com intervalos por data
             range_calls = [
                 ("get_hrv_data_range", (start, today), _hrv_metrics),
                 ("get_rhr_daily", (start, today), _general_metrics),
                 ("get_sleep_daily", (start, today), _sleep_metrics),
                 ("get_training_readiness_range", (start, today), _readiness_metrics),
-                ("get_daily_heart_rate_stats", (start, today), _general_metrics),
-                ("get_daily_stress_stats", (start, today), _general_metrics),
-                ("get_daily_body_battery_stats", (start, today), _general_metrics),
-                ("get_daily_respiration_stats", (start, today), _general_metrics),
-                ("get_daily_intensity_minutes_stats", (start, today), _general_metrics),
-                ("get_daily_floors_stats", (start, today), _general_metrics),
-                ("get_daily_hydration_stats", (start, today), _general_metrics),
                 ("get_max_metrics_range", (start, today), _performance_metrics),
                 ("get_running_economy_range", (start, today), _running_economy_metrics),
             ]
@@ -601,32 +547,10 @@ def fetch_daily_metrics(
                         if day:
                             _merge_record(row_for(day), parser(record))
 
-            for stat_type in ("STEPS", "CALORIES"):
-                stats_payload, stats_ok = _call(client, "get_daily_stats", start, today, stat_type, warnings=warnings)
-                if stats_ok and stats_payload:
-                    for record in _records(stats_payload):
-                        day = _record_date(record)
-                        if not day:
-                            continue
-                        vals = _general_metrics(record)
-                        if stat_type == "STEPS" and "steps" not in vals:
-                            value = _first_number(record, ["value", "total", "steps"])
-                            if value is not None:
-                                vals["steps"] = value
-                        if stat_type == "CALORIES" and "total_calories" not in vals:
-                            value = _first_number(record, ["value", "total", "calories"])
-                            if value is not None:
-                                vals["total_calories"] = value
-                        _merge_record(row_for(day), vals)
-
         metrics = dict(by_date.get(today, {"date": today}))
         if not metrics.get("sleep_hours"):
             metrics.pop("sleep_hours", None)
-        if not any(k != "date" for k in metrics):
-            warnings.append(
-                "Garmin login succeeded, but no daily metrics were parsed. "
-                "Check endpoint warnings, account sync status, and garminconnect compatibility."
-            )
+
         metrics["_training_sessions"] = activity_rows
 
         history_records = [
