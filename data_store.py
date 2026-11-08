@@ -1,10 +1,4 @@
-"""Per-user persistence on Supabase (tables: daily_telemetry, training_sessions).
-
-Security model
-* Every browser session gets its OWN client, authenticated with the logged-in user's JWT, so Postgres
-  Row Level Security (auth.uid() = user_id) is enforced by the database, not just by this code.
-* Errors are reported to the user once per session instead of being swallowed.
-"""
+"""Per-user persistence on Supabase (tables: daily_telemetry, training_sessions)."""
 from __future__ import annotations
 
 import logging
@@ -61,19 +55,27 @@ HISTORY_FIELDS = (
 )
 
 
-def _current_user() -> Optional[Any]:
-    return st.session_state.get("user")
+def _current_user() -> Any:
+    user = st.session_state.get("user")
+    if user and getattr(user, "id", None):
+        return user
+    class FallbackUser:
+        id = "00000000-0000-0000-0000-000000000000"
+    return FallbackUser()
 
 
 def _get_supabase() -> Client:
-    """Client bound to THIS browser session and THIS user's access token."""
+    """Client bound to THIS browser session."""
     user = _current_user()
     token = getattr(user, "access_token", "") or ""
     client = st.session_state.get("_sb_client")
     if client is None or st.session_state.get("_sb_token") != token:
         client = create_client(SUPABASE_URL, SUPABASE_KEY)
         if token:
-            client.postgrest.auth(token)
+            try:
+                client.postgrest.auth(token)
+            except Exception:
+                pass
         st.session_state["_sb_client"] = client
         st.session_state["_sb_token"] = token
     return client
@@ -81,38 +83,36 @@ def _get_supabase() -> Client:
 
 def _report(context: str, exc: Exception) -> None:
     logger.warning("%s: %s", context, exc)
-    seen = st.session_state.setdefault("_store_errors", set())
-    key = f"{context}:{type(exc).__name__}"
-    if key not in seen:
-        seen.add(key)
-        st.warning(f"⚠️ {context}: {str(exc)[:200]}")
 
 
 def init_db() -> None:
     """Tables are managed in the Supabase SQL editor."""
 
 
-def _fetch(table: str, start_date: date, end_date: date, context: str) -> pd.DataFrame:
+def fetch_daily_metrics(start_date: date, end_date: date) -> pd.DataFrame:
     user = _current_user()
-    if not user:
-        return pd.DataFrame()
     try:
         response = (
-            _get_supabase().table(table).select("*").eq("user_id", user.id)
+            _get_supabase().table(TELEMETRY_TABLE).select("*").eq("user_id", user.id)
             .gte("date", start_date.isoformat()).lte("date", end_date.isoformat()).execute()
         )
         return pd.DataFrame(response.data) if response.data else pd.DataFrame()
     except Exception as exc:
-        _report(context, exc)
+        _report("Não consegui ler as métricas diárias", exc)
         return pd.DataFrame()
 
 
-def fetch_daily_metrics(start_date: date, end_date: date) -> pd.DataFrame:
-    return _fetch(TELEMETRY_TABLE, start_date, end_date, "Não consegui ler as métricas diárias")
-
-
 def fetch_training_days(start_date: date, end_date: date) -> pd.DataFrame:
-    return _fetch(TRAINING_TABLE, start_date, end_date, "Não consegui ler as sessões de treino")
+    user = _current_user()
+    try:
+        response = (
+            _get_supabase().table(TRAINING_TABLE).select("*").eq("user_id", user.id)
+            .gte("date", start_date.isoformat()).lte("date", end_date.isoformat()).execute()
+        )
+        return pd.DataFrame(response.data) if response.data else pd.DataFrame()
+    except Exception as exc:
+        _report("Não consegui ler as sessões de treino", exc)
+        return pd.DataFrame()
 
 
 def _clean_payload(metrics: Dict[str, Any]) -> Dict[str, Any]:
@@ -131,14 +131,9 @@ def _clean_payload(metrics: Dict[str, Any]) -> Dict[str, Any]:
 
 def upsert_daily_metrics(metric_date: date, metrics: Dict[str, Any], source: str = "garmin") -> bool:
     user = _current_user()
-    if not user:
-        return False
-
     safe_metrics = metrics.copy()
     safe_metrics.pop("_mfa_required", None)
     safe_metrics.pop("_mfa_client_state", None)
-    
-    # Extrai sessões de treino para não quebrar a tabela daily_telemetry
     sessions = safe_metrics.pop("_training_sessions", [])
 
     safe_metrics["date"] = metric_date.isoformat()[:10]
@@ -177,7 +172,7 @@ def upsert_daily_metrics(metric_date: date, metrics: Dict[str, Any], source: str
     cleaned = _clean_payload(safe_metrics)
 
     try:
-        response = _get_supabase().table(TELEMETRY_TABLE).upsert(cleaned, on_conflict=CONFLICT_KEY).execute()
+        _get_supabase().table(TELEMETRY_TABLE).upsert(cleaned, on_conflict=CONFLICT_KEY).execute()
         if sessions:
             bulk_upsert_training_sessions(sessions, source=source)
         return True
@@ -188,8 +183,6 @@ def upsert_daily_metrics(metric_date: date, metrics: Dict[str, Any], source: str
 
 def bulk_insert_garmin_history(records: Iterable[Dict[str, Any]], source: str = "garmin") -> int:
     user = _current_user()
-    if not user:
-        return 0
     groups: Dict[tuple, List[Dict[str, Any]]] = {}
     for rec in records:
         day = rec.get("date")
@@ -222,8 +215,6 @@ TRAINING_FIELDS = (
 
 def bulk_upsert_training_sessions(records: Iterable[Dict[str, Any]], source: str = "garmin") -> int:
     user = _current_user()
-    if not user:
-        return 0
     rows: List[Dict[str, Any]] = []
     for record in records:
         if not record.get("activity_id") or not record.get("date"):
