@@ -1,18 +1,9 @@
-"""Garmin Connect ingestion with tolerant parsing and explicit missing-data handling.
-
-The Garmin Connect wrapper is unofficial. Endpoint availability and payload shape can
-vary by account, device, firmware and library version. This module:
-- feature-detects optional methods;
-- never substitutes invented values for missing measurements;
-- records endpoint-specific warnings without aborting the complete sync;
-- backfills daily summaries and training-load coverage when supported.
-"""
+"""Garmin Connect ingestion with strict type-safety and fallback handling."""
 from __future__ import annotations
 
 import logging
 import re
 from datetime import date, datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 logger = logging.getLogger(__name__)
@@ -59,56 +50,13 @@ def _first_number(value: Any, keys: Sequence[str]) -> Optional[float]:
     return _number(_first(value, keys))
 
 
-def _as_datetime(value: Any) -> Optional[datetime]:
-    if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        try:
-            stamp = float(value) / (1000.0 if float(value) > 10_000_000_000 else 1.0)
-            return datetime.fromtimestamp(stamp, tz=timezone.utc)
-        except (ValueError, OverflowError, OSError):
-            return None
-    text = str(value).strip()
-    if not text:
-        return None
-    try:
-        return datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-
-
-def _record_date(record: Dict[str, Any]) -> Optional[str]:
-    raw = _first(record, ["calendarDate", "date", "startTimeLocal", "startTimeGMT", "beginTimestamp"])
-    dt = _as_datetime(raw)
-    if dt:
-        return dt.date().isoformat()
-    if raw:
-        try:
-            return date.fromisoformat(str(raw)[:10]).isoformat()
-        except ValueError:
-            return None
-    return None
-
-
-def _records(payload: Any) -> List[Dict[str, Any]]:
-    found: List[Dict[str, Any]] = []
-    seen = set()
-    for item in _dicts(payload):
-        day = _record_date(item)
-        if day:
-            marker = (day, id(item))
-            if marker not in seen:
-                seen.add(marker)
-                found.append(item)
-    return found
-
-
 def _call(client: Any, method_name: str, *args: Any, warnings: List[str], **kwargs: Any) -> Tuple[Any, bool]:
     method = getattr(client, method_name, None)
     if not callable(method):
         return None, False
     try:
-        return method(*args, **kwargs), True
+        res = method(*args, **kwargs)
+        return res, True
     except Exception as exc:
         logger.warning("Garmin endpoint %s failed: %s", method_name, exc)
         warnings.append(f"{method_name}: {type(exc).__name__}")
@@ -118,45 +66,14 @@ def _call(client: Any, method_name: str, *args: Any, warnings: List[str], **kwar
 def _sleep_metrics(payload: Any) -> Dict[str, Any]:
     if not isinstance(payload, (dict, list)) or not payload:
         return {}
-    dto = _first(payload, ["dailySleepDTO", "userDailySleepDTO", "sleepDTO"])
-    source = dto if isinstance(dto, dict) else payload
     out: Dict[str, Any] = {}
+    sec = _first_number(payload, ["sleepTimeSeconds", "totalSleepSeconds", "sleepDurationSeconds"])
+    score = _first_number(payload, ["overallScore", "sleepScore", "sleepScoreValue", "value"])
 
-    seconds = _first_number(source, ["sleepTimeSeconds", "totalSleepSeconds", "sleepDurationSeconds"])
-    hours = _first_number(source, ["totalSleepHours", "sleepHours"])
-    if seconds is not None:
-        out["sleep_hours"] = round(seconds / 3600.0, 2)
-    elif hours is not None:
-        out["sleep_hours"] = round(hours, 2)
-
-    score = _first_number(source, ["overallScore", "sleepScore", "sleepScoreValue"])
-    if score is None:
-        scores = _first(source, ["sleepScores"])
-        if isinstance(scores, dict):
-            overall = scores.get("overall") or scores.get("Overall")
-            if isinstance(overall, dict):
-                score = _number(overall.get("value"))
+    if sec is not None and sec > 0:
+        out["sleep_hours"] = round(sec / 3600.0, 2)
     if score is not None:
         out["sleep_score"] = score
-
-    for field, keys in {
-        "sleep_deep_minutes": ["deepSleepSeconds", "deepSleepDurationSeconds", "deepSleepMinutes"],
-        "sleep_light_minutes": ["lightSleepSeconds", "lightSleepDurationSeconds", "lightSleepMinutes"],
-        "sleep_rem_minutes": ["remSleepSeconds", "remSleepDurationSeconds", "remSleepMinutes"],
-        "sleep_awake_minutes": ["awakeSleepSeconds", "awakeDurationSeconds", "awakeSeconds", "awakeTimeSeconds", "awakeDurationMinutes"],
-    }.items():
-        val = _first_number(source, keys)
-        if val is not None:
-            minute_key = any(_norm(k).endswith("minutes") for k in keys if _norm(k) in {_norm(x) for x in source.keys()})
-            out[field] = round(val if minute_key else val / 60.0, 1)
-
-    target_seconds = _first_number(source, ["sleepNeedSeconds", "recommendedSleepSeconds", "sleepTargetSeconds"])
-    target_hours = _first_number(source, ["sleepNeedHours", "recommendedSleepHours", "sleepTargetHours"])
-    if target_seconds is not None:
-        out["sleep_target_hours"] = round(target_seconds / 3600.0, 2)
-    elif target_hours is not None:
-        out["sleep_target_hours"] = round(target_hours, 2)
-
     return out
 
 
@@ -164,20 +81,10 @@ def _general_metrics(payload: Any) -> Dict[str, Any]:
     if not isinstance(payload, (dict, list)) or not payload:
         return {}
     mapping = {
-        "rhr": ["restingHeartRate", "restingHr", "restingHeartRateValue", "restingHeartRateInBeatsPerMinute"],
-        "heart_rate_min": ["minHeartRate", "minimumHeartRate", "lowestHeartRate"],
-        "heart_rate_max": ["maxHeartRate", "maximumHeartRate", "highestHeartRate"],
+        "rhr": ["restingHeartRate", "restingHr", "restingHeartRateValue"],
         "steps": ["totalSteps", "steps"],
-        "distance_m": ["totalDistanceMeters", "totalDistance"],
-        "floors_ascended": ["floorsAscended", "floorsClimbed"],
-        "active_calories": ["activeKilocalories", "activeCalories"],
-        "resting_calories": ["bmrKilocalories", "restingKilocalories"],
-        "total_calories": ["totalKilocalories", "totalCalories"],
-        "stress_avg": ["averageStressLevel", "avgStressLevel", "averageStress"],
-        "stress_max": ["maxStressLevel", "maximumStressLevel"],
-        "spo2_avg": ["averageSpO2", "avgSpO2", "averageSpO2Value"],
-        "spo2_min": ["lowestSpO2", "minSpO2", "minimumSpO2"],
-        "body_battery": ["bodyBatteryMostRecentValue", "bodyBatteryAtWakeTime", "currentBodyBattery", "bodyBatteryValue"],
+        "stress_avg": ["averageStressLevel", "avgStressLevel"],
+        "body_battery": ["bodyBatteryMostRecentValue", "charged"],
     }
     out: Dict[str, Any] = {}
     for field, keys in mapping.items():
@@ -187,22 +94,12 @@ def _general_metrics(payload: Any) -> Dict[str, Any]:
     return out
 
 
-def _rhr_metrics(payload: Any) -> Dict[str, Any]:
-    parsed = _general_metrics(payload)
-    scalar = _number(payload)
-    if scalar is not None:
-        parsed["rhr"] = scalar
-    return parsed
-
-
 def _hrv_metrics(payload: Any) -> Dict[str, Any]:
     if not isinstance(payload, (dict, list)) or not payload:
         return {}
-    summary = _first(payload, ["hrvSummary"])
-    source = summary if isinstance(summary, dict) else payload
     out = {}
-    nightly = _first_number(source, ["lastNightAvg", "lastNightAverage", "nightlyAverage"])
-    weekly = _first_number(source, ["weeklyAvg", "weeklyAverage", "sevenDayAvg"])
+    nightly = _first_number(payload, ["lastNightAvg", "lastNightAverage", "nightlyAverage"])
+    weekly = _first_number(payload, ["weeklyAvg", "weeklyAverage", "sevenDayAvg"])
     if nightly is not None:
         out["hrv"] = nightly
     if weekly is not None:
@@ -211,32 +108,10 @@ def _hrv_metrics(payload: Any) -> Dict[str, Any]:
 
 
 def _readiness_metrics(payload: Any) -> Dict[str, Any]:
-    if not isinstance(payload, (dict, list)) or not payload:
+    if not payload:
         return {}
-    candidates = _records(payload)
-    if not candidates:
-        candidates = [item for item in _dicts(payload) if _first_number(item, ["score", "scoreValue", "trainingReadinessScore"]) is not None]
-    if not candidates:
-        return {}
-    item = candidates[-1]
-    score = _first_number(item, ["score", "scoreValue", "trainingReadinessScore", "trainingReadiness"])
-    out = {"vendor_readiness": score} if score is not None else {}
-    return out
-
-
-def _call_first(client: Any, names: Sequence[str], *args: Any, warnings: List[str]) -> Tuple[Any, bool]:
-    for name in names:
-        if callable(getattr(client, name, None)):
-            payload, ok = _call(client, name, *args, warnings=warnings)
-            if ok and payload:
-                return payload, True
-    return None, False
-
-
-def _merge_record(target: Dict[str, Any], source: Dict[str, Any]) -> None:
-    for key, value in source.items():
-        if value is not None:
-            target[key] = value
+    score = _first_number(payload, ["score", "scoreValue", "trainingReadinessScore", "value"])
+    return {"vendor_readiness": score} if score is not None else {}
 
 
 def fetch_daily_metrics(
@@ -252,12 +127,11 @@ def fetch_daily_metrics(
     try:
         from garminconnect import Garmin
     except ImportError as exc:
-        raise RuntimeError("Instala/atualiza a dependência garminconnect antes de sincronizar.") from exc
+        raise RuntimeError("Biblioteca garminconnect não instalada.") from exc
 
     warnings: List[str] = []
-    
     if not email or not password:
-        raise RuntimeError("Email e palavra-passe Garmin são necessários.")
+        raise RuntimeError("Credenciais Garmin em falta.")
 
     try:
         client = Garmin(email, password)
@@ -266,39 +140,42 @@ def fetch_daily_metrics(
         warnings.append(f"Login Garmin falhou: {type(exc).__name__}")
         return {}, [], warnings
 
-    today = target_date.isoformat()
-    yesterday = (target_date - timedelta(days=1)).isoformat()
-    metrics: Dict[str, Any] = {"date": today}
+    today_str = target_date.isoformat()
+    yesterday_str = (target_date - timedelta(days=1)).isoformat()
+    metrics: Dict[str, Any] = {"date": today_str}
 
-    # 1. User Summary / Stats
-    summary, _ = _call_first(client, ["get_user_summary", "get_stats"], today, warnings=warnings)
+    # 1. Summary / General
+    summary, _ = _call(client, "get_user_summary", today_str, warnings=warnings)
     if summary:
-        _merge_record(metrics, _general_metrics(summary))
+        metrics.update(_general_metrics(summary))
 
     # 2. Resting Heart Rate
-    rhr_payload, _ = _call(client, "get_rhr_day", today, warnings=warnings)
-    if rhr_payload:
-        _merge_record(metrics, _rhr_metrics(rhr_payload))
+    rhr_raw, _ = _call(client, "get_rhr_day", today_str, warnings=warnings)
+    if rhr_raw:
+        rhr_val = _first_number(rhr_raw, ["restingHeartRate", "value"])
+        if rhr_val:
+            metrics["rhr"] = rhr_val
 
-    # 3. Sleep (Tenta Hoje; se estiver vazio, tenta Ontem)
-    sleep, _ = _call_first(client, ["get_daily_sleep", "get_sleep_data"], today, warnings=warnings)
-    sleep_parsed = _sleep_metrics(sleep)
-    if not sleep_parsed or not sleep_parsed.get("sleep_hours"):
-        sleep_prev, _ = _call_first(client, ["get_daily_sleep", "get_sleep_data"], yesterday, warnings=warnings)
+    # 3. HRV (Noturna)
+    hrv_raw, _ = _call(client, "get_hrv_data", today_str, warnings=warnings)
+    if hrv_raw:
+        metrics.update(_hrv_metrics(hrv_raw))
+
+    # 4. Sleep (Procura hoje; se falhar, tenta ontem)
+    sleep_raw, _ = _call(client, "get_sleep_data", today_str, warnings=warnings)
+    sleep_parsed = _sleep_metrics(sleep_raw)
+    if not sleep_parsed.get("sleep_hours"):
+        sleep_prev, _ = _call(client, "get_sleep_data", yesterday_str, warnings=warnings)
         sleep_parsed = _sleep_metrics(sleep_prev)
+    metrics.update(sleep_parsed)
 
-    if sleep_parsed:
-        _merge_record(metrics, sleep_parsed)
-
-    # 4. HRV
-    hrv_payload, _ = _call(client, "get_hrv_data", today, warnings=warnings)
-    if hrv_payload:
-        _merge_record(metrics, _hrv_metrics(hrv_payload))
-
-    # 5. Training Readiness
-    readiness_payload, _ = _call_first(client, ["get_training_readiness_range", "get_training_readiness"], today, warnings=warnings)
-    if readiness_payload:
-        _merge_record(metrics, _readiness_metrics(readiness_payload))
+    # 5. Training Readiness (Robusto a TypeError)
+    try:
+        readiness_raw, ok = _call(client, "get_training_readiness", today_str, warnings=warnings)
+        if ok and readiness_raw:
+            metrics.update(_readiness_metrics(readiness_raw))
+    except Exception as exc:
+        warnings.append(f"readiness_skip: {type(exc).__name__}")
 
     metrics["_training_sessions"] = []
     return metrics, [], warnings
