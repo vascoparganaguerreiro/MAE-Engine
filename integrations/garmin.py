@@ -1,8 +1,9 @@
-"""Garmin Connect ingestion with tolerant parsing and explicit missing-data handling.
+"""Garmin Connect ingestion with tolerant parsing, strict range clamping, and explicit missing-data handling.
 
 The Garmin Connect wrapper is unofficial. Endpoint availability and payload shape can
 vary by account, device, firmware and library version. This module therefore:
 - feature-detects optional methods;
+- clamps history requests to <= 21 days to avoid Garmin HTTP 400 range limits;
 - never substitutes invented values for missing measurements;
 - records endpoint-specific warnings without aborting the complete sync;
 - backfills daily summaries and training-load coverage when supported.
@@ -65,7 +66,6 @@ def _as_datetime(value: Any) -> Optional[datetime]:
         return None
     if isinstance(value, (int, float)):
         try:
-            # Garmin payloads may use milliseconds or seconds.
             stamp = float(value) / (1000.0 if float(value) > 10_000_000_000 else 1.0)
             return datetime.fromtimestamp(stamp, tz=timezone.utc)
         except (ValueError, OverflowError, OSError):
@@ -93,7 +93,6 @@ def _record_date(record: Dict[str, Any]) -> Optional[str]:
 
 
 def _records(payload: Any) -> List[Dict[str, Any]]:
-    """Extract date-bearing records from list/dict response variants."""
     found: List[Dict[str, Any]] = []
     seen = set()
     for item in _dicts(payload):
@@ -113,10 +112,7 @@ def _call(client: Any, method_name: str, *args: Any, warnings: List[str], **kwar
         return None, False
     try:
         return method(*args, **kwargs), True
-    except Exception as exc:  # individual endpoint failures must not discard other metrics
-        # Keep the endpoint name and a short, useful error in the UI. Garmin/library
-        # exceptions are inconsistent; the class alone is not enough to diagnose a
-        # missing metric. Redact common credential/token patterns before surfacing it.
+    except Exception as exc:
         detail = str(exc).replace("\n", " ").strip()
         detail = re.sub(r"(?i)(password|token|authorization|cookie)=?[^ ,;]+", r"\1=[redacted]", detail)
         detail = detail[:180] or "sem detalhe fornecido pela biblioteca"
@@ -139,7 +135,6 @@ def _sleep_metrics(payload: Any) -> Dict[str, Any]:
     elif hours is not None:
         out["sleep_hours"] = round(hours, 2)
 
-    # Garmin's payload usually nests the overall score inside sleepScores.overall.value.
     score = _first_number(source, ["overallScore", "sleepScore", "sleepScoreValue"])
     if score is None:
         scores = _first(source, ["sleepScores"])
@@ -158,7 +153,6 @@ def _sleep_metrics(payload: Any) -> Dict[str, Any]:
     }.items():
         val = _first_number(source, keys)
         if val is not None:
-            # Garmin's API normally uses seconds; preserve explicit minute fields.
             minute_key = any(_norm(k).endswith("minutes") for k in keys if _norm(k) in {_norm(x) for x in source.keys()})
             out[field] = round(val if minute_key else val / 60.0, 1)
 
@@ -233,7 +227,6 @@ def _general_metrics(payload: Any) -> Dict[str, Any]:
 
 
 def _rhr_metrics(payload: Any) -> Dict[str, Any]:
-    """Garmin's RHR endpoint can return either a DTO or a numeric scalar."""
     parsed = _general_metrics(payload)
     scalar = _number(payload)
     if scalar is not None:
@@ -257,7 +250,6 @@ def _hrv_metrics(payload: Any) -> Dict[str, Any]:
 
 
 def _readiness_metrics(payload: Any) -> Dict[str, Any]:
-    """Parse Garmin readiness without confusing it with Body Battery or Apex readiness."""
     if not isinstance(payload, (dict, list)) or not payload:
         return {}
     candidates = _records(payload)
@@ -285,8 +277,6 @@ def _performance_metrics(payload: Any) -> Dict[str, Any]:
     if not isinstance(payload, (dict, list)) or not payload:
         return {}
     out: Dict[str, Any] = {}
-    # Max-metrics responses vary: some contain generic/cycling nodes, others expose
-    # the values directly. Keep running and cycling values separate.
     generic = _first(payload, ["generic", "running", "run"])
     cycling = _first(payload, ["cycling", "bike"])
     run_value = _first_number(generic, ["vo2MaxValue", "vo2max", "value"]) if generic is not None else None
@@ -309,6 +299,7 @@ def _performance_metrics(payload: Any) -> Dict[str, Any]:
             out[field] = value
     return out
 
+
 def _running_economy_metrics(payload: Any) -> Dict[str, Any]:
     if not isinstance(payload, (dict, list)) or not payload:
         return {}
@@ -327,7 +318,7 @@ def _activity_rows(payload: Any) -> List[Dict[str, Any]]:
             continue
         sport_value = _first(item, ["sportTypeKey", "sportType", "activityType", "typeKey"])
         if isinstance(sport_value, dict):
-            sport_value = _first(sport_value, ["typeKey", "sportTypeKey", "name", "type" ])
+            sport_value = _first(sport_value, ["typeKey", "sportTypeKey", "name", "type"])
         row: Dict[str, Any] = {
             "date": day,
             "activity_id": str(activity_id),
@@ -390,7 +381,7 @@ def fetch_daily_metrics(
     password: str,
     target_date: date,
     fetch_history: bool = True,
-    history_days: int = 30,
+    history_days: int = 21,
     token_store: Optional[str] = None,
     mfa_client_state: Optional[Dict[str, Any]] = None,
     mfa_code: Optional[str] = None,
@@ -421,8 +412,6 @@ def fetch_daily_metrics(
             return {"_mfa_required": True, "_mfa_client_state": mfa_client_state}, [], warnings
         client = Garmin(return_on_mfa=True)
         client.resume_login(mfa_client_state, str(mfa_code).strip())
-        # resume_login has authenticated the new client. Persist its refreshed
-        # token using the same owner-only path used by ordinary login().
         if token_path is not None:
             try:
                 client.client.dump(str(token_path))
@@ -435,29 +424,27 @@ def fetch_daily_metrics(
         login_result = client.login(str(token_path) if token_path else None)
         if isinstance(login_result, tuple) and login_result and login_result[0] == "needs_mfa":
             return {"_mfa_required": True, "_mfa_client_state": login_result[1]}, [], warnings
-        # return_on_mfa=True deliberately prevents a server-side input() prompt.
-        # In garminconnect 0.3.20+, the no-MFA success path returns before the
-        # normal profile/token-store finalisation, so complete those explicitly.
         if not getattr(client, "display_name", None):
             client._load_profile_and_settings()
         if token_path is not None:
             client.client.dump(str(token_path))
 
     today = target_date.isoformat()
-    start = (target_date - timedelta(days=max(1, history_days))).isoformat()
+
+    # CLAMP CRUCIAL: A API REST da Garmin falha com HTTP 400 se a diferença de dias ultrapassar 28 dias.
+    # Garantimos um máximo de 21 dias para ter margem segura de fuso horário.
+    safe_days = min(max(1, history_days), 21)
+    start = (target_date - timedelta(days=safe_days)).isoformat()
     by_date: Dict[str, Dict[str, Any]] = {}
 
     def row_for(day: str) -> Dict[str, Any]:
         return by_date.setdefault(day, {"date": day})
 
     try:
-        # A daily summary is the broadest low-call-count source for steps, calories,
-        # distance, HR, stress and intensity minutes.
         summary, summary_ok = _call_first(client, ["get_user_summary", "get_stats"], today, warnings=warnings)
         if summary:
             _merge_record(row_for(today), _general_metrics(summary))
 
-        # Dedicated daily HR endpoint is more reliable than expecting RHR in summary.
         rhr_payload, _rhr_ok = _call(client, "get_rhr_day", today, warnings=warnings)
         rhr_metrics = _rhr_metrics(rhr_payload)
         if rhr_metrics:
@@ -475,12 +462,10 @@ def fetch_daily_metrics(
         if weekly_rhr_value is not None:
             row_for(today)["rhr_weekly_avg"] = weekly_rhr_value
 
-        # Prefer the current Sleep service endpoint; retain the older method as fallback.
         sleep, sleep_ok = _call_first(client, ["get_daily_sleep", "get_sleep_data"], today, warnings=warnings)
         if sleep:
             _merge_record(row_for(today), _sleep_metrics(sleep))
         if not _sleep_metrics(sleep):
-            # Garmin sometimes attributes the most recent completed night to yesterday.
             previous, previous_ok = _call_first(client, ["get_daily_sleep", "get_sleep_data"],
                                                 (target_date - timedelta(days=1)).isoformat(), warnings=warnings)
             previous_metrics = _sleep_metrics(previous)
@@ -498,8 +483,6 @@ def fetch_daily_metrics(
         if readiness:
             _merge_record(row_for(today), _readiness_metrics(readiness))
 
-        # Optional daily wellness endpoints. These are independent so one unsupported
-        # metric never prevents the others from being stored.
         optional_calls = [
             ("get_daily_body_battery_stats", (today, today), _general_metrics),
             ("get_daily_stress_stats", (today, today), _general_metrics),
@@ -533,8 +516,6 @@ def fetch_daily_metrics(
         if load_focus:
             _merge_record(row_for(today), _general_metrics(load_focus))
 
-        # Current body-battery curve can provide recharge/drain even where the daily
-        # summary only has low/high values.
         battery, _battery_ok = _call(client, "get_body_battery", today, today, warnings=warnings)
         if battery:
             _merge_record(row_for(today), _general_metrics(battery))
@@ -559,16 +540,12 @@ def fetch_daily_metrics(
                 if day and value is not None:
                     row_for(day)["endurance_score"] = value
 
-        # Training-load activities are stored individually. A successful range fetch
-        # also proves which dates had no activities, so those dates can safely be zero.
         activity_payload, activity_ok = _call_first(
             client, ["get_training_load_activities", "get_activities_by_date"],
             start, today, warnings=warnings
         )
         activity_range_complete = activity_ok and activity_payload is not None
         if not activity_ok and callable(getattr(client, "search_activities", None)):
-            # Search endpoint has a page limit; it is not treated as proof of complete
-            # daily coverage, but it can still contribute the sessions it returned.
             activity_payload, activity_ok = _call(
                 client, "search_activities", 0, 100,
                 startDate=start, endDate=today, warnings=warnings
@@ -576,8 +553,8 @@ def fetch_daily_metrics(
             activity_range_complete = False
         activity_rows = _activity_rows(activity_payload)
         if activity_range_complete:
-            for offset in range(max(1, history_days) + 1):
-                day = (target_date - timedelta(days=history_days - offset)).isoformat()
+            for offset in range(safe_days + 1):
+                day = (target_date - timedelta(days=safe_days - offset)).isoformat()
                 row_for(day)["daily_training_load"] = 0.0
                 row_for(day)["training_load_coverage"] = True
         for activity in activity_rows:
@@ -588,13 +565,10 @@ def fetch_daily_metrics(
                 row["daily_training_load"] = float(row.get("daily_training_load", 0.0)) + load
                 row["training_load_coverage"] = True
             elif activity_range_complete:
-                # An activity exists but Garmin did not include its load: don't
-                # misrepresent that date as a zero-load day.
                 row.pop("daily_training_load", None)
                 row["training_load_coverage"] = False
 
         if fetch_history:
-            # Date-range summaries provide most historical wellness values in one call.
             daily_history, hist_ok = _call(client, "get_daily_summaries", start, today, warnings=warnings)
             if daily_history:
                 for record in _records(daily_history):
@@ -626,8 +600,7 @@ def fetch_daily_metrics(
                         day = _record_date(record)
                         if day:
                             _merge_record(row_for(day), parser(record))
-            # The current wrapper also exposes the Connect daily-statistics endpoint.
-            # It is queried by type because STEPS, CALORIES and related series may be separate.
+
             for stat_type in ("STEPS", "CALORIES"):
                 stats_payload, stats_ok = _call(client, "get_daily_stats", start, today, stat_type, warnings=warnings)
                 if stats_ok and stats_payload:
@@ -646,13 +619,9 @@ def fetch_daily_metrics(
                                 vals["total_calories"] = value
                         _merge_record(row_for(day), vals)
 
-        # Ensure current endpoint responses are available even if date-range data
-        # omitted today or Garmin returned a date in a different timezone.
         metrics = dict(by_date.get(today, {"date": today}))
         if not metrics.get("sleep_hours"):
             metrics.pop("sleep_hours", None)
-        # A successful login is not the same as a successful data sync. Make an
-        # entirely empty Garmin response explicit so the UI cannot imply otherwise.
         if not any(k != "date" for k in metrics):
             warnings.append(
                 "Garmin login succeeded, but no daily metrics were parsed. "
@@ -667,8 +636,4 @@ def fetch_daily_metrics(
         ]
         return metrics, history_records, warnings
     finally:
-        # Do not call Garmin.logout() here: current garminconnect versions remove
-        # the token-store file on logout. The client object is short-lived and will
-        # be released when this function returns; the owner-only token cache remains
-        # available for the next sync. Users can revoke the token in Garmin settings.
         pass
