@@ -132,15 +132,65 @@ def _clean_payload(metrics: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def upsert_daily_metrics(metric_date: date, metrics: Dict[str, Any], source: str = "garmin") -> bool:
+    """Inserts or updates daily metrics, routing training sessions and coercing floats."""
     user = _current_user()
     if not user:
         return False
-    payload = {"user_id": user.id, "date": metric_date.isoformat(), "source": source, **_clean_payload(metrics)}
+
+    safe_metrics = metrics.copy()
+    safe_metrics.pop("_mfa_required", None)
+    safe_metrics.pop("_mfa_client_state", None)
+    
+    # Isolate training sessions so they don't break the daily_telemetry insert
+    sessions = safe_metrics.pop("_training_sessions", [])
+
+    safe_metrics["date"] = metric_date.isoformat()
+    safe_metrics["user_id"] = user.id
+    safe_metrics["source"] = source
+    
+    # Force float casting to avoid Supabase strict typing rejections (integer passed to double precision)
+    float_fields = [
+        "hrv", "hrv_weekly_avg", "rhr", "rhr_weekly_avg", "heart_rate_min", "heart_rate_max",
+        "sleep_score", "sleep_hours", "sleep_target_hours", "sleep_deep_minutes", "sleep_light_minutes",
+        "sleep_rem_minutes", "sleep_awake_minutes", "respiration_sleep_avg", "respiration_wake_avg",
+        "spo2_avg", "spo2_min", "stress_avg", "stress_max", "body_battery", "body_battery_low",
+        "body_battery_high", "body_battery_charged", "body_battery_drained", "distance_m",
+        "floors_ascended", "intensity_minutes_moderate", "intensity_minutes_vigorous", "active_calories",
+        "resting_calories", "total_calories", "vendor_readiness", "readiness_sleep_score",
+        "readiness_hrv_score", "readiness_load_score", "readiness_recovery_hours", "vo2max_running",
+        "vo2max_cycling", "ftp_w", "lactate_threshold_hr", "lactate_threshold_speed", "running_economy",
+        "endurance_score", "low_aerobic_load", "high_aerobic_load", "anaerobic_load", "acute_training_load",
+        "hydration_intake_ml", "hydration_goal_ml", "sweat_loss_ml", "daily_training_load"
+    ]
+    
+    for field in float_fields:
+        if field in safe_metrics and safe_metrics[field] is not None:
+            try:
+                safe_metrics[field] = float(safe_metrics[field])
+            except (ValueError, TypeError):
+                safe_metrics.pop(field)
+
+    int_fields = ["steps", "steps_goal"]
+    for field in int_fields:
+        if field in safe_metrics and safe_metrics[field] is not None:
+            try:
+                safe_metrics[field] = int(float(safe_metrics[field]))
+            except (ValueError, TypeError):
+                safe_metrics.pop(field)
+
+    cleaned = _clean_payload(safe_metrics)
+
     try:
-        _get_supabase().table(TELEMETRY_TABLE).upsert(payload, on_conflict=CONFLICT_KEY).execute()
-        return True
+        # 1. Upsert daily metrics
+        response = _get_supabase().table(TELEMETRY_TABLE).upsert(cleaned, on_conflict=CONFLICT_KEY).execute()
+        
+        # 2. Upsert training sessions individually (if any exist)
+        if sessions:
+            bulk_upsert_training_sessions(sessions, source=source)
+            
+        return len(response.data) > 0 if response.data else True
     except Exception as exc:  # noqa: BLE001
-        _report("Erro ao guardar métricas", exc)
+        _report("Erro ao guardar métricas no Supabase", exc)
         return False
 
 
