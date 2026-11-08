@@ -16,7 +16,7 @@ from data_store import (
 )
 from integrations.garmin import fetch_daily_metrics as garmin_fetch
 
-# Importação das UIs
+# Importação dos módulos de interface
 try:
     from ui.today import render_today_page
 except ImportError:
@@ -52,7 +52,6 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# Estilização Escura
 st.markdown(
     """
     <style>
@@ -75,45 +74,40 @@ st.markdown(
 )
 
 # -----------------------------------------------------------------------------
-# Gestão de Sessão & Autenticação
+# 1. Processamento do Retorno OAuth (Google Login / Supabase Code Exchange)
 # -----------------------------------------------------------------------------
-if "is_authenticated" not in st.session_state:
-    st.session_state["is_authenticated"] = False
+sb_client = _get_supabase()
 
-if "user" not in st.session_state:
-    st.session_state["user"] = None
+# Verifica se o Google redirecionou de volta com ?code=...
+if "code" in st.query_params:
+    auth_code = st.query_params["code"]
+    try:
+        res = sb_client.auth.exchange_code_for_session({"auth_code": auth_code})
+        if res and res.user:
+            st.session_state["user"] = res.user
+            st.session_state["is_authenticated"] = True
+            st.query_params.clear()
+            st.rerun()
+    except Exception as exc:
+        logger.warning("Falha ao trocar código OAuth no Supabase: %s", exc)
+
+# Verifica se existe sessão ativa persistida no Supabase
+if not st.session_state.get("is_authenticated"):
+    try:
+        session = sb_client.auth.get_session()
+        if session and session.user:
+            st.session_state["user"] = session.user
+            st.session_state["is_authenticated"] = True
+    except Exception:
+        pass
 
 if "daily_metrics" not in st.session_state:
     st.session_state["daily_metrics"] = {}
 
-
-def sync_garmin_now(email: str, passw: str) -> bool:
-    target_date = date.today()
-    with st.spinner("A autenticar na Garmin e a sincronizar dados..."):
-        metrics, history, warnings = garmin_fetch(
-            email=email,
-            password=passw,
-            target_date=target_date,
-            fetch_history=True,
-            history_days=14,
-        )
-
-        if metrics and any(k != "date" for k in metrics if not k.startswith("_")):
-            st.session_state["daily_metrics"] = metrics
-            st.session_state["last_sync_time"] = datetime.now().strftime("%H:%M:%S")
-
-            try:
-                upsert_daily_metrics(target_date, metrics)
-            except Exception as exc:
-                logger.warning("Erro ao guardar no Supabase: %s", exc)
-            return True
-        return False
-
-
 # -----------------------------------------------------------------------------
-# ECRÃ DE LOGIN (Portão de Entrada Estrito)
+# 2. Portão de Autenticação APEX (Login Principal)
 # -----------------------------------------------------------------------------
-if not st.session_state["is_authenticated"]:
+if not st.session_state.get("is_authenticated"):
     st.markdown("<br><br>", unsafe_allow_html=True)
     col1, col2, col3 = st.columns([1, 2, 1])
 
@@ -121,55 +115,65 @@ if not st.session_state["is_authenticated"]:
         st.title("⚡ APEX ENGINE")
         st.caption("PERFORMANCE · RECOVERY · LONGEVITY")
         st.markdown("---")
+        st.subheader("Entrar na tua conta APEX")
 
-        st.subheader("Entrar no APEX Engine")
-
-        with st.form("login_form"):
-            garmin_email = st.text_input("E-mail Garmin", value="vascoparganaguerreiro@gmail.com")
-            garmin_pass = st.text_input("Palavra-passe Garmin", type="password")
-            submit = st.form_submit_button("⚡ Entrar & Sincronizar", use_container_width=True)
-
-            if submit:
-                if garmin_email and garmin_pass:
-                    success = sync_garmin_now(garmin_email, garmin_pass)
-                    if success:
-                        class ApexUser:
-                            id = "00000000-0000-0000-0000-000000000000"
-                            email = garmin_email
-
-                        st.session_state["user"] = ApexUser()
-                        st.session_state["is_authenticated"] = True
-                        st.success("Sessão iniciada com sucesso!")
-                        st.rerun()
-                    else:
-                        st.error("Falha ao autenticar na Garmin. Verifica as tuas credenciais.")
-                else:
-                    st.error("Por favor preenche o e-mail e palavra-passe.")
-
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.caption("Opções alternativas de Login:")
-
-        # Link de Autorização para Google OAuth
+        # Botão Principal: Google OAuth
         try:
-            sb = _get_supabase()
-            res = sb.auth.sign_in_with_oauth({
+            res = sb_client.auth.sign_in_with_oauth({
                 "provider": "google",
                 "options": {"redirect_to": "https://mae-engine.streamlit.app"}
             })
             oauth_url = getattr(res, "url", None)
             if oauth_url:
                 st.link_button("🔑 Entrar com Conta Google", oauth_url, use_container_width=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("OAuth URL generator info: %s", exc)
 
-    st.stop()  # Impede a apresentação de qualquer elemento do dashboard se não houver login
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # Login por Email / Palavra-passe APEX
+        with st.form("apex_login_form"):
+            email_in = st.text_input("E-mail APEX", value="vascoparganaguerreiro@gmail.com")
+            pass_in = st.text_input("Palavra-passe APEX", type="password")
+            btn_login = st.form_submit_button("Entrar", use_container_width=True)
+
+            if btn_login:
+                try:
+                    res = sb_client.auth.sign_in_with_password({"email": email_in, "password": pass_in})
+                    if res and res.user:
+                        st.session_state["user"] = res.user
+                        st.session_state["is_authenticated"] = True
+                        st.success("Sessão iniciada!")
+                        st.rerun()
+                except Exception as exc:
+                    st.error(f"Erro ao entrar na conta APEX: {exc}")
+
+        st.markdown("---")
+        # Modo Pessoal / Acesso Direto para desenvolvimento
+        if st.button("⚡ Acesso Pessoal Direto (Modo Rápido)", use_container_width=True):
+            class PersonalUser:
+                id = "00000000-0000-0000-0000-000000000000"
+                email = "vascoparganaguerreiro@gmail.com"
+            st.session_state["user"] = PersonalUser()
+            st.session_state["is_authenticated"] = True
+            st.rerun()
+
+    st.stop()
 
 # -----------------------------------------------------------------------------
-# DASHBOARD APEX (Apenas visível APÓS autenticação efetuada)
+# 3. Dashboard APEX (Utilizador Autenticado)
 # -----------------------------------------------------------------------------
 user = st.session_state.get("user")
 user_email = getattr(user, "email", "vascoparganaguerreiro@gmail.com")
-sync_time = st.session_state.get("last_sync_time", "Hoje")
+
+# Carrega métricas existentes do Supabase no arranque se a sessão estiver vazia
+if not st.session_state.get("daily_metrics"):
+    try:
+        df_today = store_fetch_daily(date.today(), date.today())
+        if not df_today.empty:
+            st.session_state["daily_metrics"] = df_today.iloc[0].to_dict()
+    except Exception as exc:
+        logger.warning("Falha ao carregar métricas prévias do Supabase: %s", exc)
 
 col_title, col_user = st.columns([3, 1])
 
@@ -180,35 +184,64 @@ with col_title:
 with col_user:
     st.markdown(
         f"<div style='text-align: right; color: #888; font-size: 0.85rem; margin-top: 10px;'>"
-        f"Utilizador: <b>{user_email}</b><br>"
-        f"Última Sync: <b>{sync_time}</b>"
+        f"Conta APEX: <b>{user_email}</b><br>"
+        f"Última Sync: <b>{st.session_state.get('last_sync_time', 'Base de Dados')}</b>"
         f"</div>",
         unsafe_allow_html=True,
     )
     if st.button("🚪 Terminar Sessão", use_container_width=True):
+        try:
+            sb_client.auth.sign_out()
+        except Exception:
+            pass
         st.session_state["is_authenticated"] = False
         st.session_state["user"] = None
         st.session_state["daily_metrics"] = {}
         st.rerun()
 
-# Painel para re-sincronizar se necessário
-with st.expander("⚙️ Definições & Re-sincronizar Garmin"):
+# -----------------------------------------------------------------------------
+# 4. Central de Conexões e Integrações (Garmin, Strava, etc.)
+# -----------------------------------------------------------------------------
+with st.expander("⚙️ Perfil & Conexões de Plataformas (Garmin / Strava / Oura)"):
+    st.subheader("Ligação Garmin Connect")
     c1, c2, c3 = st.columns([2, 2, 1])
     with c1:
-        re_email = st.text_input("E-mail Garmin", value=user_email, key="re_email")
+        g_email = st.text_input("E-mail Garmin", value=user_email, key="garmin_email_input")
     with c2:
-        re_pass = st.text_input("Palavra-passe Garmin", type="password", key="re_pass")
+        g_pass = st.text_input("Palavra-passe Garmin", type="password", key="garmin_pass_input")
     with c3:
         st.write("##")
-        if st.button("↻ Re-Sync", use_container_width=True):
-            if re_email and re_pass:
-                if sync_garmin_now(re_email, re_pass):
-                    st.success("Re-sincronizado!")
-                    st.rerun()
-                else:
-                    st.error("Erro na re-sincronização.")
+        if st.button("↻ Sincronizar Garmin", use_container_width=True):
+            if g_email and g_pass:
+                with st.spinner("A descarregar dados do Garmin Connect..."):
+                    metrics, history, warnings = garmin_fetch(
+                        email=g_email,
+                        password=g_pass,
+                        target_date=date.today(),
+                        fetch_history=True,
+                        history_days=14,
+                    )
+                    if metrics and any(k != "date" for k in metrics if not k.startswith("_")):
+                        st.session_state["daily_metrics"] = metrics
+                        st.session_state["last_sync_time"] = datetime.now().strftime("%H:%M:%S")
+                        upsert_daily_metrics(date.today(), metrics)
+                        st.success("⚡ Dados Garmin integrados na tua conta APEX!")
+                        st.rerun()
+                    else:
+                        st.error("Não foi possível obter dados da Garmin. Verifica os dados de acesso.")
+            else:
+                st.warning("Insere o email e palavra-passe da conta Garmin.")
 
-# Separadores da Dashboard
+    st.divider()
+    st.subheader("Próximas Conexões")
+    c_str, c_our, c_wah = st.columns(3)
+    c_str.button("🟠 Strava (Em breve)", disabled=True, use_container_width=True)
+    c_our.button("💍 Oura Ring (Em breve)", disabled=True, use_container_width=True)
+    c_wah.button("🔵 Wahoo Fitness (Em breve)", disabled=True, use_container_width=True)
+
+# -----------------------------------------------------------------------------
+# 5. Dashboard Principal por Separadores
+# -----------------------------------------------------------------------------
 tabs = st.tabs([
     "00 · Hoje",
     "01 · Recuperação",
