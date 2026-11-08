@@ -29,14 +29,13 @@ st.set_page_config(
 )
 store.init_db()
 
-# ── Portão de Autenticação Direto e Estável (Sem bloqueios externos)
+# ── Portão de Autenticação Direto e Estável
 if "is_authenticated" not in st.session_state:
     st.session_state["is_authenticated"] = False
 
 if "user" not in st.session_state:
     st.session_state["user"] = None
 
-# Ecrã de Login simples e direto se não estiver autenticado
 if not st.session_state["is_authenticated"]:
     st.markdown("<br><br>", unsafe_allow_html=True)
     c1, c2, c3 = st.columns([1, 2, 1])
@@ -211,7 +210,7 @@ def _run_garmin_sync() -> bool:
     activities = metrics.pop("_training_sessions", [])
     metrics.pop("date", None)
     
-    # Guarda na sessão local para renderização imediata nos cartões
+    # GUARDA IMEDIATAMENTE NA SESSÃO PARA FORÇAR A EXIBIÇÃO NOS CARTÕES
     st.session_state["last_sync_metrics"] = metrics.copy()
 
     try:
@@ -243,7 +242,7 @@ if sync_notice:
             for warning in sync_notice["warnings"][:40]:
                 st.code(warning, language=None)
 
-# ── Carregamento e fusão de dados para os cartões
+# ── Carregamento de dados para o DataFrame
 today = APP_TODAY
 start_day = today - timedelta(days=60)
 dates = pd.date_range(start=start_day, end=today, freq="D")
@@ -256,8 +255,9 @@ if not raw_daily.empty and "date" in raw_daily.columns:
     raw_daily["Date"] = pd.to_datetime(raw_daily["date"], errors="coerce").dt.normalize()
     base_df = base_df.merge(raw_daily.drop(columns=["date"], errors="ignore"), on="Date", how="left")
 
+# INJEÇÃO FORÇADA DOS DADOS DA GARMIN DIRETAMENTE NA ÚLTIMA LINHA (HOJE)
 local_sync = st.session_state.get("last_sync_metrics", {})
-if local_sync:
+if local_sync and not base_df.empty:
     last_idx = base_df.index[-1]
     for k, v in local_sync.items():
         if k in base_df.columns:
