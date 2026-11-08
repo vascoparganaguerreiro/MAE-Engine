@@ -3,7 +3,6 @@
 Security model
 * Every browser session gets its OWN client, authenticated with the logged-in user's JWT, so Postgres
   Row Level Security (auth.uid() = user_id) is enforced by the database, not just by this code.
-  (The previous version shared one anonymous client between all visitors.)
 * Errors are reported to the user once per session instead of being swallowed.
 """
 from __future__ import annotations
@@ -14,9 +13,9 @@ from typing import Any, Dict, Iterable, List, Optional
 
 import pandas as pd
 
-try:  # Keep calculation/parser tests runnable without the web/database extras installed.
+try:
     import streamlit as st
-except ImportError:  # pragma: no cover - production installs Streamlit via requirements.txt
+except ImportError:
     class _StreamlitFallback:
         session_state: Dict[str, Any] = {}
         @staticmethod
@@ -26,7 +25,7 @@ except ImportError:  # pragma: no cover - production installs Streamlit via requ
 
 try:
     from supabase import Client, create_client
-except ImportError:  # pragma: no cover - production installs Supabase via requirements.txt
+except ImportError:
     class Client:  # type: ignore[no-redef]
         pass
     def create_client(*args: Any, **kwargs: Any):
@@ -81,7 +80,6 @@ def _get_supabase() -> Client:
 
 
 def _report(context: str, exc: Exception) -> None:
-    """Log always; show the user each distinct problem once per session."""
     logger.warning("%s: %s", context, exc)
     seen = st.session_state.setdefault("_store_errors", set())
     key = f"{context}:{type(exc).__name__}"
@@ -104,7 +102,7 @@ def _fetch(table: str, start_date: date, end_date: date, context: str) -> pd.Dat
             .gte("date", start_date.isoformat()).lte("date", end_date.isoformat()).execute()
         )
         return pd.DataFrame(response.data) if response.data else pd.DataFrame()
-    except Exception as exc:  # noqa: BLE001 - network / RLS / schema problems must not crash the page
+    except Exception as exc:
         _report(context, exc)
         return pd.DataFrame()
 
@@ -135,21 +133,60 @@ def upsert_daily_metrics(metric_date: date, metrics: Dict[str, Any], source: str
     user = _current_user()
     if not user:
         return False
-    payload = {"user_id": user.id, "date": metric_date.isoformat(), "source": source, **_clean_payload(metrics)}
+
+    safe_metrics = metrics.copy()
+    safe_metrics.pop("_mfa_required", None)
+    safe_metrics.pop("_mfa_client_state", None)
+    
+    # Extrai sessões de treino para não quebrar a tabela daily_telemetry
+    sessions = safe_metrics.pop("_training_sessions", [])
+
+    safe_metrics["date"] = metric_date.isoformat()[:10]
+    safe_metrics["user_id"] = user.id
+    safe_metrics["source"] = source
+
+    float_fields = [
+        "hrv", "hrv_weekly_avg", "rhr", "rhr_weekly_avg", "heart_rate_min", "heart_rate_max",
+        "sleep_score", "sleep_hours", "sleep_target_hours", "sleep_deep_minutes", "sleep_light_minutes",
+        "sleep_rem_minutes", "sleep_awake_minutes", "respiration_sleep_avg", "respiration_wake_avg",
+        "spo2_avg", "spo2_min", "stress_avg", "stress_max", "body_battery", "body_battery_low",
+        "body_battery_high", "body_battery_charged", "body_battery_drained", "distance_m",
+        "floors_ascended", "intensity_minutes_moderate", "intensity_minutes_vigorous", "active_calories",
+        "resting_calories", "total_calories", "vendor_readiness", "readiness_sleep_score",
+        "readiness_hrv_score", "readiness_load_score", "readiness_recovery_hours", "vo2max_running",
+        "vo2max_cycling", "ftp_w", "lactate_threshold_hr", "lactate_threshold_speed", "running_economy",
+        "endurance_score", "low_aerobic_load", "high_aerobic_load", "anaerobic_load", "acute_training_load",
+        "hydration_intake_ml", "hydration_goal_ml", "sweat_loss_ml", "daily_training_load"
+    ]
+
+    for field in float_fields:
+        if field in safe_metrics and safe_metrics[field] is not None:
+            try:
+                safe_metrics[field] = float(safe_metrics[field])
+            except (ValueError, TypeError):
+                safe_metrics.pop(field)
+
+    int_fields = ["steps", "steps_goal"]
+    for field in int_fields:
+        if field in safe_metrics and safe_metrics[field] is not None:
+            try:
+                safe_metrics[field] = int(float(safe_metrics[field]))
+            except (ValueError, TypeError):
+                safe_metrics.pop(field)
+
+    cleaned = _clean_payload(safe_metrics)
+
     try:
-        _get_supabase().table(TELEMETRY_TABLE).upsert(payload, on_conflict=CONFLICT_KEY).execute()
+        response = _get_supabase().table(TELEMETRY_TABLE).upsert(cleaned, on_conflict=CONFLICT_KEY).execute()
+        if sessions:
+            bulk_upsert_training_sessions(sessions, source=source)
         return True
-    except Exception as exc:  # noqa: BLE001
-        _report("Erro ao guardar métricas", exc)
+    except Exception as exc:
+        _report("Erro ao guardar métricas diárias", exc)
         return False
 
 
 def bulk_insert_garmin_history(records: Iterable[Dict[str, Any]], source: str = "garmin") -> int:
-    """Save several past days. Returns how many rows were written.
-
-    Records are grouped by which fields they contain, so a day that only has HRV can never
-    overwrite that day's resting heart rate with NULL (a mixed bulk upsert would).
-    """
     user = _current_user()
     if not user:
         return 0
@@ -168,7 +205,7 @@ def bulk_insert_garmin_history(records: Iterable[Dict[str, Any]], source: str = 
         try:
             _get_supabase().table(TELEMETRY_TABLE).upsert(rows, on_conflict=CONFLICT_KEY).execute()
             written += len(rows)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             _report("Erro ao guardar o histórico Garmin", exc)
     return written
 
@@ -184,7 +221,6 @@ TRAINING_FIELDS = (
 
 
 def bulk_upsert_training_sessions(records: Iterable[Dict[str, Any]], source: str = "garmin") -> int:
-    """Persist activity-level records without inventing sessions for rest days."""
     user = _current_user()
     if not user:
         return 0
@@ -206,12 +242,11 @@ def bulk_upsert_training_sessions(records: Iterable[Dict[str, Any]], source: str
             rows, on_conflict="user_id,activity_id"
         ).execute()
         return len(rows)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _report("Erro ao guardar atividades Garmin", exc)
         return 0
 
 
-# Settings live in the browser session (they reset on refresh). Persisting them needs a user_settings table.
 def get_setting(key: str, default: Any = None) -> Any:
     return st.session_state.get(f"setting_{key}", default)
 
@@ -220,4 +255,4 @@ def save_setting(key: str, value: Any) -> None:
     st.session_state[f"setting_{key}"] = value
 
 
-set_setting = save_setting   # the UI calls both names
+set_setting = save_setting
